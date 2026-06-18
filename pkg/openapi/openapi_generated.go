@@ -5202,6 +5202,26 @@ func schema_pkg_apis_ome_v1beta1_ModelStatusSpec(ref common.ReferenceCallback) c
 							},
 						},
 					},
+					"nodesSkipped": {
+						VendorExtensible: spec.VendorExtensible{
+							Extensions: spec.Extensions{
+								"x-kubernetes-list-type": "atomic",
+							},
+						},
+						SchemaProps: spec.SchemaProps{
+							Description: "NodesSkipped lists nodes that intentionally did not download this model (e.g. the model agent's VRAM precheck rejected it because the model is larger than the node's aggregate GPU memory). Distinct from NodesFailed: nothing is broken — the node is just ineligible. Inspect the per-node model-agent ConfigMap entry's StatusDetail.Reason for the discriminator.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
 				},
 				Required: []string{"state"},
 			},

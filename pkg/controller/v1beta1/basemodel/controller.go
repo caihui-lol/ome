@@ -253,8 +253,8 @@ func (r *BaseModelReconciler) updateModelStatus(ctx context.Context, baseModel *
 		func(ctx context.Context, config *modelagent.ModelConfig) error {
 			return r.updateModelSpecWithRetry(ctx, baseModel, config)
 		},
-		func(ctx context.Context, nodesReady, nodesFailed []string) error {
-			return r.updateStatusWithRetry(ctx, baseModel, nodesReady, nodesFailed)
+		func(ctx context.Context, nodesReady, nodesFailed, nodesSkipped []string) error {
+			return r.updateStatusWithRetry(ctx, baseModel, nodesReady, nodesFailed, nodesSkipped)
 		})
 }
 
@@ -264,15 +264,15 @@ func (r *ClusterBaseModelReconciler) updateModelStatus(ctx context.Context, clus
 		func(ctx context.Context, config *modelagent.ModelConfig) error {
 			return r.updateModelSpecWithRetry(ctx, clusterBaseModel, config)
 		},
-		func(ctx context.Context, nodesReady, nodesFailed []string) error {
-			return r.updateStatusWithRetry(ctx, clusterBaseModel, nodesReady, nodesFailed)
+		func(ctx context.Context, nodesReady, nodesFailed, nodesSkipped []string) error {
+			return r.updateStatusWithRetry(ctx, clusterBaseModel, nodesReady, nodesFailed, nodesSkipped)
 		})
 }
 
 // processModelStatus is a shared utility function for processing ConfigMaps and updating model status
 func processModelStatus(ctx context.Context, kubeClient client.Client, log logr.Logger, namespace, name string, isClusterScope bool,
 	specUpdateFunc func(context.Context, *modelagent.ModelConfig) error,
-	statusUpdateFunc func(context.Context, []string, []string) error) error {
+	statusUpdateFunc func(context.Context, []string, []string, []string) error) error {
 
 	modelInfo := name
 	if !isClusterScope {
@@ -294,9 +294,10 @@ func processModelStatus(ctx context.Context, kubeClient client.Client, log logr.
 	log.Info("Processing model status from ConfigMaps", "configMapsTotal", len(configMaps.Items))
 
 	// Track counters for logging
-	var processedNodes, validNodes, readyNodes, failedNodes int
+	var processedNodes, validNodes, readyNodes, failedNodes, skippedNodes int
 	var nodesReady []string
 	var nodesFailed []string
+	var nodesSkipped []string
 	var specUpdateErrors []string
 
 	// Process each ConfigMap to find this model's status
@@ -341,14 +342,23 @@ func processModelStatus(ctx context.Context, kubeClient client.Client, log logr.
 			}
 		}
 
-		// Update status arrays based on model status
+		// Update status arrays based on model status. A Failed entry whose
+		// StatusDetail.Reason is a known skip reason (e.g. VRAMInsufficient
+		// from the model-agent VRAM precheck) is reclassified as a skip:
+		// the node is ineligible, not broken, and shouldn't be reported as
+		// a download failure on the CR.
 		switch modelEntry.Status {
 		case modelagent.ModelStatusReady:
 			nodesReady = addToSlice(nodesReady, configMap.Name)
 			readyNodes++
 		case modelagent.ModelStatusFailed:
-			nodesFailed = addToSlice(nodesFailed, configMap.Name)
-			failedNodes++
+			if modelEntry.StatusDetail != nil && isSkipReason(modelEntry.StatusDetail.Reason) {
+				nodesSkipped = addToSlice(nodesSkipped, configMap.Name)
+				skippedNodes++
+			} else {
+				nodesFailed = addToSlice(nodesFailed, configMap.Name)
+				failedNodes++
+			}
 		case modelagent.ModelStatusUpdating:
 			// Don't add to either array for updating status
 		case modelagent.ModelStatusDeleted:
@@ -361,11 +371,13 @@ func processModelStatus(ctx context.Context, kubeClient client.Client, log logr.
 	// Sort the arrays for consistency
 	slices.Sort(nodesReady)
 	slices.Sort(nodesFailed)
+	slices.Sort(nodesSkipped)
 
 	// Log summary - important for observability
 	log.Info("Model status summary",
 		"readyNodes", readyNodes,
 		"failedNodes", failedNodes,
+		"skippedNodes", skippedNodes,
 		"totalProcessed", processedNodes,
 		"validNodes", validNodes)
 
@@ -375,7 +387,7 @@ func processModelStatus(ctx context.Context, kubeClient client.Client, log logr.
 	}
 
 	// Update the model status with retry logic
-	return statusUpdateFunc(ctx, nodesReady, nodesFailed)
+	return statusUpdateFunc(ctx, nodesReady, nodesFailed, nodesSkipped)
 }
 
 // updateModelSpec updates BaseModel spec with configuration from ConfigMap
@@ -603,15 +615,41 @@ func addToSlice(s []string, item string) []string {
 	return append(s, item)
 }
 
-// calculateLifecycleState determines the lifecycle state based on node status
-func calculateLifecycleState(nodesReady, nodesFailed []string) v1beta1.LifeCycleState {
+// calculateLifecycleState determines the lifecycle state based on node status.
+//
+// Skipped nodes (e.g. those the model agent's VRAM precheck rejected as
+// ineligible) collapse into Failed at the state level when no node is Ready —
+// otherwise the CR would sit in InTransit forever in clusters where no node
+// can fit the model. The discrimination between "downloads broken" and "no
+// node large enough" lives in the NodesFailed vs NodesSkipped slices on the
+// CR status, not in the LifeCycleState.
+func calculateLifecycleState(nodesReady, nodesFailed, nodesSkipped []string) v1beta1.LifeCycleState {
 	if len(nodesReady) > 0 {
 		return v1beta1.LifeCycleStateReady
-	} else if len(nodesFailed) > 0 {
-		return v1beta1.LifeCycleStateFailed
-	} else {
-		return v1beta1.LifeCycleStateInTransit
 	}
+	if len(nodesFailed) > 0 || len(nodesSkipped) > 0 {
+		return v1beta1.LifeCycleStateFailed
+	}
+	return v1beta1.LifeCycleStateInTransit
+}
+
+// skipReasonVRAMInsufficient mirrors the literal reason the model-agent's
+// VRAM precheck writes into ModelEntry.StatusDetail.Reason when the model is
+// larger than the node's aggregate GPU memory. Kept inline (not exported from
+// modelagent) to avoid a new shared constant for a single value; promote to a
+// shared package if more skip reasons appear.
+const skipReasonVRAMInsufficient = "VRAMInsufficient"
+
+// isSkipReason reports whether a per-node Failed status should be reclassified
+// as an intentional skip (added to NodesSkipped) rather than a real failure
+// (NodesFailed). Today only the VRAM precheck produces a skip; extend the
+// switch as additional precheck reasons land.
+func isSkipReason(reason string) bool {
+	switch reason {
+	case skipReasonVRAMInsufficient:
+		return true
+	}
+	return false
 }
 
 // updateModelSpecWithRetry updates ClusterBaseModel spec with retry logic for resource conflicts
@@ -623,13 +661,13 @@ func (r *ClusterBaseModelReconciler) updateModelSpecWithRetry(ctx context.Contex
 }
 
 // updateStatusWithRetry updates ClusterBaseModel status with retry logic for resource conflicts
-func (r *ClusterBaseModelReconciler) updateStatusWithRetry(ctx context.Context, clusterBaseModel *v1beta1.ClusterBaseModel, nodesReady, nodesFailed []string) error {
-	return updateModelStatusWithRetry(ctx, r.Client, r.Log, clusterBaseModel, nodesReady, nodesFailed, "ClusterBaseModel")
+func (r *ClusterBaseModelReconciler) updateStatusWithRetry(ctx context.Context, clusterBaseModel *v1beta1.ClusterBaseModel, nodesReady, nodesFailed, nodesSkipped []string) error {
+	return updateModelStatusWithRetry(ctx, r.Client, r.Log, clusterBaseModel, nodesReady, nodesFailed, nodesSkipped, "ClusterBaseModel")
 }
 
 // updateStatusWithRetry updates BaseModel status with retry logic for resource conflicts
-func (r *BaseModelReconciler) updateStatusWithRetry(ctx context.Context, baseModel *v1beta1.BaseModel, nodesReady, nodesFailed []string) error {
-	return updateModelStatusWithRetry(ctx, r.Client, r.Log, baseModel, nodesReady, nodesFailed, "BaseModel")
+func (r *BaseModelReconciler) updateStatusWithRetry(ctx context.Context, baseModel *v1beta1.BaseModel, nodesReady, nodesFailed, nodesSkipped []string) error {
+	return updateModelStatusWithRetry(ctx, r.Client, r.Log, baseModel, nodesReady, nodesFailed, nodesSkipped, "BaseModel")
 }
 
 // updateModelSpecWithRetry updates BaseModel spec with retry logic for resource conflicts
@@ -672,10 +710,10 @@ func retryUpdate(ctx context.Context, kubeClient client.Client, log logr.Logger,
 }
 
 // updateModelStatusWithRetry is a shared utility function for updating model status with retry logic
-func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, log logr.Logger, obj client.Object, nodesReady, nodesFailed []string, modelType string) error {
+func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, log logr.Logger, obj client.Object, nodesReady, nodesFailed, nodesSkipped []string, modelType string) error {
 	updateFunc := func(ctx context.Context, client client.Client, obj client.Object) error {
 		// Get current status and update it
-		var currentNodesReady, currentNodesFailed []string
+		var currentNodesReady, currentNodesFailed, currentNodesSkipped []string
 		var currentState v1beta1.LifeCycleState
 
 		// Type switch to handle both BaseModel and ClusterBaseModel
@@ -683,10 +721,12 @@ func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, l
 		case *v1beta1.BaseModel:
 			currentNodesReady = model.Status.NodesReady
 			currentNodesFailed = model.Status.NodesFailed
+			currentNodesSkipped = model.Status.NodesSkipped
 			currentState = model.Status.State
 		case *v1beta1.ClusterBaseModel:
 			currentNodesReady = model.Status.NodesReady
 			currentNodesFailed = model.Status.NodesFailed
+			currentNodesSkipped = model.Status.NodesSkipped
 			currentState = model.Status.State
 		default:
 			return fmt.Errorf("unsupported model type: %T", obj)
@@ -700,9 +740,12 @@ func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, l
 		if !slices.Equal(currentNodesFailed, nodesFailed) {
 			updated = true
 		}
+		if !slices.Equal(currentNodesSkipped, nodesSkipped) {
+			updated = true
+		}
 
 		// Update lifecycle state
-		newState := calculateLifecycleState(nodesReady, nodesFailed)
+		newState := calculateLifecycleState(nodesReady, nodesFailed, nodesSkipped)
 		if currentState != newState {
 			updated = true
 		}
@@ -714,10 +757,12 @@ func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, l
 			case *v1beta1.BaseModel:
 				model.Status.NodesReady = nodesReady
 				model.Status.NodesFailed = nodesFailed
+				model.Status.NodesSkipped = nodesSkipped
 				model.Status.State = newState
 			case *v1beta1.ClusterBaseModel:
 				model.Status.NodesReady = nodesReady
 				model.Status.NodesFailed = nodesFailed
+				model.Status.NodesSkipped = nodesSkipped
 				model.Status.State = newState
 			}
 
@@ -727,6 +772,7 @@ func updateModelStatusWithRetry(ctx context.Context, kubeClient client.Client, l
 			log.Info(fmt.Sprintf("Updated %s status", modelType),
 				"nodesReady", len(nodesReady),
 				"nodesFailed", len(nodesFailed),
+				"nodesSkipped", len(nodesSkipped),
 				"state", newState)
 		}
 		return nil

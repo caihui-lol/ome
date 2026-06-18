@@ -99,10 +99,35 @@ func (p *DownloadProgress) Percentage() float64 {
 // ModelEntry represents an entry in the node model ConfigMap
 // This is the top-level structure stored for each model in the ConfigMap
 type ModelEntry struct {
-	Name     string            `json:"name"`               // Name of the model
-	Status   ModelStatus       `json:"status"`             // Current status of the model on this node
-	Config   *ModelConfig      `json:"config,omitempty"`   // Model configuration, may be nil if just tracking status
-	Progress *DownloadProgress `json:"progress,omitempty"` // Download progress, nil when not downloading
+	Name         string            `json:"name"`                   // Name of the model
+	Status       ModelStatus       `json:"status"`                 // Current status of the model on this node
+	Config       *ModelConfig      `json:"config,omitempty"`       // Model configuration, may be nil if just tracking status
+	Progress     *DownloadProgress `json:"progress,omitempty"`     // Download progress, nil when not downloading
+	StatusDetail *StatusDetail     `json:"statusDetail,omitempty"` // Optional context for the current Status (e.g. why a download was skipped)
+}
+
+// StatusDetail is optional context that accompanies a model's Status entry on
+// a node. It is written by the model agent when a status transition carries
+// extra reasoning the controller / operator will want to see (e.g. the VRAM
+// precheck refused to download).
+//
+// The Reason field is the discriminator; consumers should switch on it to
+// decide which optional fields are meaningful for the given record.
+type StatusDetail struct {
+	Reason  string `json:"reason"`  // Machine-readable reason, e.g. "VRAMInsufficient"
+	Message string `json:"message"` // Human-readable explanation
+
+	// VRAM precheck context. Populated when Reason == "VRAMInsufficient".
+	RequiredBytes        int64   `json:"requiredBytes,omitempty"`
+	AvailableVRAMBytes   int64   `json:"availableVRAMBytes,omitempty"`
+	EstimatedWeightBytes int64   `json:"estimatedWeightBytes,omitempty"`
+	SafetyFactor         float64 `json:"safetyFactor,omitempty"`
+
+	// Estimator observability (independent of Reason): which classifier branch
+	// produced the size estimate the gate compared against.
+	Format   string `json:"format,omitempty"`
+	Method   string `json:"method,omitempty"`
+	Strategy string `json:"strategy,omitempty"`
 }
 
 // ConvertMetadataToModelConfig converts internal ModelMetadata to a client-facing ModelConfig

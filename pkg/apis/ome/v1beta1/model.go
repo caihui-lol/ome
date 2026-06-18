@@ -401,6 +401,14 @@ type ModelStatusSpec struct {
 
 	// +listType=atomic
 	NodesFailed []string `json:"nodesFailed,omitempty"`
+
+	// NodesSkipped lists nodes that intentionally did not download this model
+	// (e.g. the model agent's VRAM precheck rejected it because the model is
+	// larger than the node's aggregate GPU memory). Distinct from NodesFailed:
+	// nothing is broken — the node is just ineligible. Inspect the per-node
+	// model-agent ConfigMap entry's StatusDetail.Reason for the discriminator.
+	// +listType=atomic
+	NodesSkipped []string `json:"nodesSkipped,omitempty"`
 }
 
 // BaseModel is the Schema for the basemodels API

@@ -231,6 +231,148 @@ func TestBaseModelReconcile(t *testing.T) {
 				g.Expect(updated.Status.NodesFailed).To(gomega.ContainElement("node-2"))
 				g.Expect(updated.Status.NodesReady).To(gomega.HaveLen(1))
 				g.Expect(updated.Status.NodesFailed).To(gomega.HaveLen(1))
+				g.Expect(updated.Status.NodesSkipped).To(gomega.BeEmpty())
+			},
+		},
+		{
+			name: "BaseModel on heterogeneous GPU cluster: VRAM-skipped nodes do not appear as failed",
+			baseModel: &v1beta1.BaseModel{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "het-gpu-model",
+					Namespace:  "test-ns",
+					Finalizers: []string{constants.BaseModelFinalizer},
+				},
+				Spec: v1beta1.BaseModelSpec{
+					ModelFormat: v1beta1.ModelFormat{
+						Name: "safetensors",
+					},
+				},
+			},
+			setupMocks: func(c client.Client) {
+				omeNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: constants.OMENamespace},
+				}
+				g.Expect(c.Create(context.TODO(), omeNamespace)).To(gomega.Succeed())
+
+				for _, nodeName := range []string{"h100-1", "a10-1", "a10-2", "broken-1"} {
+					node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+					g.Expect(c.Create(context.TODO(), node)).To(gomega.Succeed())
+				}
+
+				// Per-node entries:
+				//   h100-1:   Ready
+				//   a10-1:    Failed + StatusDetail.Reason=VRAMInsufficient → expect NodesSkipped
+				//   a10-2:    Failed + StatusDetail.Reason=VRAMInsufficient → expect NodesSkipped
+				//   broken-1: Failed + no StatusDetail               → expect NodesFailed
+				entries := map[string]modelagent.ModelEntry{
+					"h100-1": {Status: modelagent.ModelStatusReady},
+					"a10-1": {
+						Status: modelagent.ModelStatusFailed,
+						StatusDetail: &modelagent.StatusDetail{
+							Reason:  "VRAMInsufficient",
+							Message: "required 169 GB > available VRAM 96 GB on this node",
+						},
+					},
+					"a10-2": {
+						Status: modelagent.ModelStatusFailed,
+						StatusDetail: &modelagent.StatusDetail{
+							Reason: "VRAMInsufficient",
+						},
+					},
+					"broken-1": {Status: modelagent.ModelStatusFailed},
+				}
+				for nodeName, entry := range entries {
+					entryData, _ := json.Marshal(entry)
+					configMap := &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      nodeName,
+							Namespace: constants.OMENamespace,
+							Labels:    map[string]string{constants.ModelStatusConfigMapLabel: "true"},
+						},
+						Data: map[string]string{
+							"test-ns.basemodel.het-gpu-model": string(entryData),
+						},
+					}
+					g.Expect(c.Create(context.TODO(), configMap)).To(gomega.Succeed())
+				}
+			},
+			validate: func(t *testing.T, c client.Client, baseModel *v1beta1.BaseModel, result ctrl.Result, reconcileErr error) {
+				updated := &v1beta1.BaseModel{}
+				err := c.Get(context.TODO(), types.NamespacedName{
+					Name:      baseModel.Name,
+					Namespace: baseModel.Namespace,
+				}, updated)
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+
+				// h100-1 is ready → top-level Ready (any Ready wins).
+				g.Expect(updated.Status.State).To(gomega.Equal(v1beta1.LifeCycleStateReady))
+				g.Expect(updated.Status.NodesReady).To(gomega.ConsistOf("h100-1"))
+				// VRAMInsufficient → NodesSkipped, not NodesFailed.
+				g.Expect(updated.Status.NodesSkipped).To(gomega.ConsistOf("a10-1", "a10-2"))
+				// Real failure stays in NodesFailed.
+				g.Expect(updated.Status.NodesFailed).To(gomega.ConsistOf("broken-1"))
+			},
+		},
+		{
+			name: "BaseModel all-skipped cluster: no node fits → Failed, all in NodesSkipped",
+			baseModel: &v1beta1.BaseModel{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "too-big-model",
+					Namespace:  "test-ns",
+					Finalizers: []string{constants.BaseModelFinalizer},
+				},
+				Spec: v1beta1.BaseModelSpec{
+					ModelFormat: v1beta1.ModelFormat{
+						Name: "safetensors",
+					},
+				},
+			},
+			setupMocks: func(c client.Client) {
+				omeNamespace := &corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{Name: constants.OMENamespace},
+				}
+				g.Expect(c.Create(context.TODO(), omeNamespace)).To(gomega.Succeed())
+
+				for _, nodeName := range []string{"a10-1", "a10-2"} {
+					node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+					g.Expect(c.Create(context.TODO(), node)).To(gomega.Succeed())
+
+					entry := modelagent.ModelEntry{
+						Status: modelagent.ModelStatusFailed,
+						StatusDetail: &modelagent.StatusDetail{
+							Reason: "VRAMInsufficient",
+						},
+					}
+					entryData, _ := json.Marshal(entry)
+					configMap := &corev1.ConfigMap{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:      nodeName,
+							Namespace: constants.OMENamespace,
+							Labels:    map[string]string{constants.ModelStatusConfigMapLabel: "true"},
+						},
+						Data: map[string]string{
+							"test-ns.basemodel.too-big-model": string(entryData),
+						},
+					}
+					g.Expect(c.Create(context.TODO(), configMap)).To(gomega.Succeed())
+				}
+			},
+			validate: func(t *testing.T, c client.Client, baseModel *v1beta1.BaseModel, result ctrl.Result, reconcileErr error) {
+				updated := &v1beta1.BaseModel{}
+				err := c.Get(context.TODO(), types.NamespacedName{
+					Name:      baseModel.Name,
+					Namespace: baseModel.Namespace,
+				}, updated)
+				g.Expect(err).NotTo(gomega.HaveOccurred())
+
+				// Every node skipped, none ready → top-level Failed (so the CR
+				// doesn't sit in InTransit forever); discrimination lives in
+				// NodesSkipped (not NodesFailed) so operators can tell apart
+				// "no node large enough" from "downloads broken".
+				g.Expect(updated.Status.State).To(gomega.Equal(v1beta1.LifeCycleStateFailed))
+				g.Expect(updated.Status.NodesReady).To(gomega.BeEmpty())
+				g.Expect(updated.Status.NodesFailed).To(gomega.BeEmpty())
+				g.Expect(updated.Status.NodesSkipped).To(gomega.ConsistOf("a10-1", "a10-2"))
 			},
 		},
 		{
@@ -989,38 +1131,85 @@ func TestCalculateLifecycleState(t *testing.T) {
 		name          string
 		nodesReady    []string
 		nodesFailed   []string
+		nodesSkipped  []string
 		expectedState v1beta1.LifeCycleState
 	}{
 		{
 			name:          "Ready state with ready nodes",
 			nodesReady:    []string{"node1", "node2"},
 			nodesFailed:   []string{},
+			nodesSkipped:  []string{},
 			expectedState: v1beta1.LifeCycleStateReady,
 		},
 		{
-			name:          "Ready state with mixed nodes",
+			name:          "Ready state with mixed ready and failed",
 			nodesReady:    []string{"node1"},
 			nodesFailed:   []string{"node2"},
+			nodesSkipped:  []string{},
+			expectedState: v1beta1.LifeCycleStateReady,
+		},
+		{
+			name:          "Ready state with heterogeneous GPU cluster (some ready, some skipped)",
+			nodesReady:    []string{"h100-node1"},
+			nodesFailed:   []string{},
+			nodesSkipped:  []string{"a10-node1", "a10-node2"},
 			expectedState: v1beta1.LifeCycleStateReady,
 		},
 		{
 			name:          "Failed state with only failed nodes",
 			nodesReady:    []string{},
 			nodesFailed:   []string{"node1", "node2"},
+			nodesSkipped:  []string{},
+			expectedState: v1beta1.LifeCycleStateFailed,
+		},
+		{
+			name:          "Failed state when every node is skipped (no node fits the model)",
+			nodesReady:    []string{},
+			nodesFailed:   []string{},
+			nodesSkipped:  []string{"a10-node1", "a10-node2"},
+			expectedState: v1beta1.LifeCycleStateFailed,
+		},
+		{
+			name:          "Failed state with skipped and failed but no ready",
+			nodesReady:    []string{},
+			nodesFailed:   []string{"broken-node"},
+			nodesSkipped:  []string{"ineligible-node"},
 			expectedState: v1beta1.LifeCycleStateFailed,
 		},
 		{
 			name:          "InTransit state with no nodes",
 			nodesReady:    []string{},
 			nodesFailed:   []string{},
+			nodesSkipped:  []string{},
 			expectedState: v1beta1.LifeCycleStateInTransit,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			state := calculateLifecycleState(tt.nodesReady, tt.nodesFailed)
+			state := calculateLifecycleState(tt.nodesReady, tt.nodesFailed, tt.nodesSkipped)
 			g.Expect(state).To(gomega.Equal(tt.expectedState))
+		})
+	}
+}
+
+func TestIsSkipReason(t *testing.T) {
+	g := gomega.NewGomegaWithT(t)
+
+	tests := []struct {
+		name   string
+		reason string
+		want   bool
+	}{
+		{name: "VRAMInsufficient is a skip", reason: "VRAMInsufficient", want: true},
+		{name: "Empty reason is not a skip", reason: "", want: false},
+		{name: "Arbitrary failure reason is not a skip", reason: "DownloadFailed", want: false},
+		{name: "Unknown reason is not a skip", reason: "SomethingElse", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g.Expect(isSkipReason(tt.reason)).To(gomega.Equal(tt.want))
 		})
 	}
 }

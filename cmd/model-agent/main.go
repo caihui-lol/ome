@@ -25,6 +25,7 @@ import (
 	omev1beta1informers "github.com/sgl-project/ome/pkg/client/informers/externalversions"
 	"github.com/sgl-project/ome/pkg/logging"
 	"github.com/sgl-project/ome/pkg/modelagent"
+	"github.com/sgl-project/ome/pkg/modelparser"
 	"github.com/sgl-project/ome/pkg/version"
 	"github.com/sgl-project/ome/pkg/xet"
 )
@@ -206,7 +207,7 @@ func initializeComponents(
 	zapLogger := logger.Desugar()
 
 	// Create a ModelConfigParser instance
-	modelConfigParser := modelagent.NewModelConfigParser(omeClient, logger)
+	modelConfigParser := modelparser.NewModelConfigParser(omeClient, logger)
 
 	// Create a ConfigMapReconciler instance
 	configMapReconciler := modelagent.NewConfigMapReconciler(cfg.nodeName, cfg.namespace, kubeClient, logger)

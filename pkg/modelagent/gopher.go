@@ -23,6 +23,7 @@ import (
 	omev1beta1lister "github.com/sgl-project/ome/pkg/client/listers/ome/v1beta1"
 	"github.com/sgl-project/ome/pkg/constants"
 	"github.com/sgl-project/ome/pkg/logging"
+	"github.com/sgl-project/ome/pkg/modelparser"
 	"github.com/sgl-project/ome/pkg/ociobjectstore"
 	"github.com/sgl-project/ome/pkg/principals"
 	"github.com/sgl-project/ome/pkg/utils"
@@ -54,7 +55,7 @@ type activeDownload struct {
 }
 
 type Gopher struct {
-	modelConfigParser      *ModelConfigParser
+	modelConfigParser      *modelparser.ModelConfigParser
 	configMapReconciler    *ConfigMapReconciler
 	downloadRetry          int
 	concurrency            int
@@ -89,7 +90,7 @@ const (
 )
 
 func NewGopher(
-	modelConfigParser *ModelConfigParser,
+	modelConfigParser *modelparser.ModelConfigParser,
 	configMapReconciler *ConfigMapReconciler,
 	xetConfig *xet.Config,
 	kubeClient kubernetes.Interface,
@@ -316,7 +317,7 @@ func (s *Gopher) safeParseAndUpdateModelConfig(modelPath string, baseModel *v1be
 
 	// add artifact info if necessary
 	if artifact != nil {
-		metadata = s.modelConfigParser.populateArtifactAttribute(artifact, metadata)
+		metadata = s.modelConfigParser.PopulateArtifactAttribute(artifact, metadata)
 	}
 
 	// If valid metadata was found, update the ConfigMap while still holding the lock
@@ -1447,7 +1448,7 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 
 		childrenPaths := make([]string, 0)
 		childrenPaths, _, _, _ = s.parseModelConfigDataEntry(ctx, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel))
-		artifact = s.modelConfigParser.buildArtifactAttribute(shaStr, matchedModelTypeAndModeName, parentPath, childrenPaths)
+		artifact = s.modelConfigParser.BuildArtifactAttribute(shaStr, matchedModelTypeAndModeName, parentPath, childrenPaths)
 	} else {
 		childrenPaths := make([]string, 0)
 		// handle the case when download Policy is updated from ReuseIfExists to AlwaysDownload
@@ -1599,7 +1600,7 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 
 		s.logger.Infof("Successfully downloaded HuggingFace model %s to %s",
 			modelInfo, downloadPath)
-		artifact = s.modelConfigParser.buildArtifactAttribute(shaStr, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel), destPath, childrenPaths)
+		artifact = s.modelConfigParser.BuildArtifactAttribute(shaStr, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel), destPath, childrenPaths)
 	}
 
 	// Parse model config and update ConfigMap

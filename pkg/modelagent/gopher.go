@@ -2,6 +2,8 @@ package modelagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,6 +38,9 @@ const (
 	Download         GopherTaskType = "Download"
 	DownloadOverride GopherTaskType = "DownloadOverride"
 	Delete           GopherTaskType = "Delete"
+
+	huggingFaceArtifactConfigMapKeyPrefix = "artifact.huggingface."
+	huggingFaceArtifactReadyMarkerFile    = ".ome-hf-artifact-ready"
 )
 
 type GopherTask struct {
@@ -430,13 +435,28 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 		case storage.StorageTypeOCI:
 			osUri, err := getTargetDirPath(&baseModelSpec)
 			destPath := getDestPath(&baseModelSpec, s.modelRootDir)
+			var artifact *Artifact
+			hfOriginIdentity, hasHFOriginIdentity := huggingFaceArtifactIdentityFromTask(task)
+			useHuggingFaceOriginReuse := hasHFOriginIdentity && shouldUseHuggingFaceOriginObjectStorageReuse(task, baseModelSpec)
+			hfArtifactParentKey := ""
+			hfArtifactParentPath := ""
+			if hasHFOriginIdentity {
+				s.logger.Infof("OCI model %s has Hugging Face origin metadata %s@%s for artifact reuse",
+					modelInfo, hfOriginIdentity.HFModelID, hfOriginIdentity.HFCommitSHA)
+			}
+			if useHuggingFaceOriginReuse {
+				hfArtifactParentKey = huggingFaceArtifactConfigMapKey(hfOriginIdentity)
+				hfArtifactParentPath = canonicalHuggingFaceArtifactPath(s.modelRootDir, hfOriginIdentity)
+				s.logger.Infof("OCI model %s will use canonical Hugging Face artifact parent %s at %s",
+					modelInfo, hfArtifactParentKey, hfArtifactParentPath)
+			}
 			if err != nil {
 				s.logger.Errorf("Failed to get target directory path for model %s: %v", modelInfo, err)
 				return err
 			}
-			downloadObjectStorageModel := func() error {
+			downloadObjectStorageModel := func(downloadPath string) error {
 				err = utils.Retry(s.downloadRetry, 100*time.Millisecond, func() error {
-					downloadErr := s.downloadModel(ctx, osUri, destPath, task)
+					downloadErr := s.downloadModel(ctx, osUri, downloadPath, task)
 					if downloadErr != nil {
 						// Check if context was cancelled
 						if ctx.Err() != nil {
@@ -465,7 +485,66 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 			}
 
 			if shouldUseSamePathObjectStorageReuse(task) {
-				if matchedKey, reused := s.findReadyObjectStorageModelWithSamePath(ctx, task, baseModelSpec, destPath); reused {
+				var reused bool
+				if useHuggingFaceOriginReuse {
+					artifact, reused, err = s.reuseHuggingFaceOriginArtifactIfPossible(ctx, task, baseModelSpec, modelType, namespace, name, destPath, hfOriginIdentity)
+					if err != nil {
+						return err
+					}
+				}
+				if reused {
+					s.logger.Infof("Reusing Ready Hugging Face origin model artifact for %s/%s at %s", namespace, name, destPath)
+				} else if useHuggingFaceOriginReuse {
+					if wait, waitErr := s.requeueIfHuggingFaceArtifactParentUpdating(ctx, task, hfOriginIdentity); wait || waitErr != nil {
+						return waitErr
+					}
+					if !allowFallbackDownload {
+						s.demoteToNormalPriority(task)
+						return nil
+					}
+					parentPath, parentStatus, reserved, err := s.configMapReconciler.reserveHuggingFaceArtifactParentEntry(ctx, hfArtifactParentKey, hfOriginIdentity, hfArtifactParentPath)
+					if err != nil {
+						return err
+					}
+					if !reserved {
+						switch parentStatus {
+						case ModelStatusUpdating:
+							if s.requeueSamePathInFlightReuseWait(task, hfArtifactParentKey) {
+								return nil
+							}
+							return fmt.Errorf("timed out waiting for Hugging Face artifact parent %s to become Ready", hfArtifactParentKey)
+						case ModelStatusReady:
+							artifact, reused, err = s.reuseHuggingFaceOriginArtifactIfPossible(ctx, task, baseModelSpec, modelType, namespace, name, destPath, hfOriginIdentity)
+							if err != nil {
+								return err
+							}
+							if reused {
+								s.logger.Infof("Reusing Ready Hugging Face origin model artifact for %s/%s at %s after reservation check", namespace, name, destPath)
+							} else {
+								s.logger.Warnf("Hugging Face artifact parent %s is Ready but cannot be reused from %s; rebuilding canonical parent", hfArtifactParentKey, parentPath)
+							}
+						}
+					}
+					if !reused {
+						if err := downloadObjectStorageModel(hfArtifactParentPath); err != nil {
+							if cleanupErr := s.configMapReconciler.deleteConfigMapDataEntry(ctx, hfArtifactParentKey); cleanupErr != nil {
+								s.logger.Warnf("failed to remove Hugging Face artifact parent reservation %s after download failure: %v", hfArtifactParentKey, cleanupErr)
+							}
+							return err
+						}
+						if markerErr := writeHuggingFaceArtifactReadyMarker(hfArtifactParentPath); markerErr != nil {
+							s.logger.Warnf("failed to write Hugging Face artifact ready marker for parent %s at %s: %v", hfArtifactParentKey, hfArtifactParentPath, markerErr)
+						}
+						if err := s.markHuggingFaceArtifactParentReady(ctx, hfArtifactParentKey, hfArtifactParentPath, hfOriginIdentity); err != nil {
+							s.logger.Errorf("downloaded Hugging Face artifact parent %s at %s but failed to mark it Ready: %v", hfArtifactParentKey, hfArtifactParentPath, err)
+							return err
+						}
+						artifact, err = s.linkHuggingFaceOriginArtifact(ctx, task, name, destPath, hfArtifactParentKey, hfArtifactParentPath, hfOriginIdentity)
+						if err != nil {
+							return err
+						}
+					}
+				} else if matchedKey, reused := s.findReadyObjectStorageModelWithSamePath(ctx, task, baseModelSpec, destPath); reused {
 					s.logger.Infof("Reusing Ready same-path model artifact for %s/%s from %s at %s", namespace, name, matchedKey, destPath)
 				} else if matchedKey, wait := s.findUpdatingObjectStorageModelWithSamePath(ctx, task, baseModelSpec, destPath); wait &&
 					s.requeueSamePathInFlightReuseWait(task, matchedKey) {
@@ -473,11 +552,14 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				} else if !allowFallbackDownload {
 					s.demoteToNormalPriority(task)
 					return nil
-				} else if err := downloadObjectStorageModel(); err != nil {
+				} else if err := downloadObjectStorageModel(destPath); err != nil {
 					return err
 				}
-			} else if err := downloadObjectStorageModel(); err != nil {
+			} else if err := downloadObjectStorageModel(destPath); err != nil {
 				return err
+			}
+			if artifact == nil && hasHFOriginIdentity {
+				artifact = s.buildSelfParentArtifactFromIdentity(ctx, task, hfOriginIdentity, destPath)
 			}
 			// Parse model config and update ConfigMap
 			// We can pass either BaseModel or ClusterBaseModel based on the task's model type
@@ -495,7 +577,7 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				s.logger.Warnf("No model object found in task, skipping config parsing")
 			}
 
-			if err := s.safeParseAndUpdateModelConfig(destPath, baseModel, clusterBaseModel, nil); err != nil {
+			if err := s.safeParseAndUpdateModelConfig(destPath, baseModel, clusterBaseModel, artifact); err != nil {
 				s.logger.Errorf("Failed to parse and update model config: %v", err)
 			}
 		case storage.StorageTypeVendor:
@@ -580,7 +662,7 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 			s.logger.Infof("Starting deletion for model %s", modelInfo)
 			destPath := getDestPath(&baseModelSpec, s.modelRootDir)
 			// check if it needs to skip artifact deletion
-			isSkippingDeletion, _, _, _ := s.isSkippingArtifactDeletion(ctx, task, destPath, false)
+			isSkippingDeletion, isRemoveParent, parentName, parentDir := s.isSkippingArtifactDeletion(ctx, task, destPath, s.hasSharedArtifactMetadata(ctx, task))
 			if !isSkippingDeletion {
 				err = s.deleteModel(destPath, task)
 				if err != nil {
@@ -592,7 +674,10 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				} else {
 					s.logger.Infof("Successfully deleted the ClusterBaseModel %s", task.ClusterBaseModel.Name)
 				}
+			} else {
+				s.logger.Infof("model %s artifact deletion will be skipped", modelInfo)
 			}
+			s.deleteParentArtifactIfUnreferenced(ctx, isRemoveParent, parentName, parentDir)
 		case storage.StorageTypeVendor:
 			s.logger.Infof("Skipping deletion for model %s", modelInfo)
 		case storage.StorageTypeHuggingFace:
@@ -613,24 +698,7 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 			} else {
 				s.logger.Infof("model %s artifact deletion will be skipped", modelInfo)
 			}
-			if isRemoveParent && parentName != "" && parentDir != "" {
-				// check whether the parent directory still has other directory points to it using symbolic link
-				isParentHasSymbolicLinkPointedTo, symbolicLinkSearchErr := utils.HasSymlinkPointingToDir(s.modelRootDir, parentDir)
-				if symbolicLinkSearchErr != nil {
-					s.logger.Infof("fails to search for the SymbolicLink pointing to parent Dir %s: %v. will regard the parent is still being pointed conservatively", parentDir, symbolicLinkSearchErr)
-					isParentHasSymbolicLinkPointedTo = true
-				}
-				s.logger.Infof("parent %s:%s has other directory points to: %v", parentName, parentDir, isParentHasSymbolicLinkPointedTo)
-				if !isParentHasSymbolicLinkPointedTo {
-					err = s.deleteModel(parentDir, nil)
-					if err != nil {
-						s.logger.Errorf("fail to delete parent model artifact directory %s: %s", parentName, parentDir)
-					}
-					s.logger.Infof("Successfully delete parent model artifact directory %s: %s", parentName, parentDir)
-				}
-			} else {
-				s.logger.Infof("no need to delete parent model artifact directory %s: %s", parentName, parentDir)
-			}
+			s.deleteParentArtifactIfUnreferenced(ctx, isRemoveParent, parentName, parentDir)
 		case storage.StorageTypeLocal:
 			s.logger.Infof("Skipping deletion for local storage model %s (local files should not be deleted)", modelInfo)
 			// For local storage, we should NOT delete the actual files
@@ -684,6 +752,141 @@ func (s *Gopher) demoteToNormalPriority(task *GopherTask) {
 
 func shouldUseSamePathObjectStorageReuse(task *GopherTask) bool {
 	return task != nil && task.TaskType == Download
+}
+
+func shouldUseHuggingFaceOriginObjectStorageReuse(task *GopherTask, baseModelSpec v1beta1.BaseModelSpec) bool {
+	return shouldUseSamePathObjectStorageReuse(task) &&
+		baseModelSpec.Storage != nil &&
+		baseModelSpec.Storage.DownloadPolicy != nil &&
+		*baseModelSpec.Storage.DownloadPolicy == v1beta1.ReuseIfExists
+}
+
+func (i ArtifactIdentity) isValid() bool {
+	return strings.EqualFold(i.OriginType, ArtifactOriginTypeHuggingFace) &&
+		strings.TrimSpace(i.HFModelID) != "" &&
+		isValidHuggingFaceCommitSHA(i.HFCommitSHA)
+}
+
+func (i ArtifactIdentity) toOrigin() *ArtifactOrigin {
+	if !i.isValid() {
+		return nil
+	}
+	return &ArtifactOrigin{
+		Type:        ArtifactOriginTypeHuggingFace,
+		HFModelID:   i.HFModelID,
+		HFCommitSHA: strings.ToLower(i.HFCommitSHA),
+	}
+}
+
+func isValidHuggingFaceCommitSHA(sha string) bool {
+	if len(sha) != 40 {
+		return false
+	}
+	for _, c := range sha {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func huggingFaceArtifactIdentityFromTask(task *GopherTask) (ArtifactIdentity, bool) {
+	if task == nil {
+		return ArtifactIdentity{}, false
+	}
+	if task.BaseModel != nil {
+		return huggingFaceArtifactIdentityFromAnnotations(task.BaseModel.Annotations)
+	}
+	if task.ClusterBaseModel != nil {
+		return huggingFaceArtifactIdentityFromAnnotations(task.ClusterBaseModel.Annotations)
+	}
+	return ArtifactIdentity{}, false
+}
+
+func huggingFaceArtifactIdentityFromAnnotations(annotations map[string]string) (ArtifactIdentity, bool) {
+	if annotations == nil {
+		return ArtifactIdentity{}, false
+	}
+	modelID := strings.TrimSpace(annotations[HuggingFaceModelIDAnnotationKey])
+	sha := strings.TrimSpace(annotations[HuggingFaceSHAAnnotationKey])
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: strings.ToLower(sha),
+	}
+	if !identity.isValid() {
+		return ArtifactIdentity{}, false
+	}
+	return identity, true
+}
+
+func huggingFaceArtifactConfigMapKey(identity ArtifactIdentity) string {
+	return huggingFaceArtifactConfigMapKeyPrefix + sanitizeConfigMapKeyComponent(identity.HFModelID) + "." + shortConfigMapKeyHash(identity.HFModelID) + "." + strings.ToLower(identity.HFCommitSHA)
+}
+
+func isHuggingFaceArtifactConfigMapKey(key string) bool {
+	return strings.HasPrefix(key, huggingFaceArtifactConfigMapKeyPrefix)
+}
+
+// shortConfigMapKeyHash keeps the synthetic parent key readable while avoiding
+// collisions from lossy path sanitization of Hugging Face model IDs.
+func shortConfigMapKeyHash(value string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(value)))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+func sanitizeConfigMapKeyComponent(value string) string {
+	var b strings.Builder
+	for _, c := range strings.TrimSpace(value) {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' {
+			b.WriteRune(c)
+			continue
+		}
+		b.WriteByte('.')
+	}
+	sanitized := strings.Trim(b.String(), ".")
+	if sanitized == "" {
+		return "unknown"
+	}
+	return sanitized
+}
+
+func canonicalHuggingFaceArtifactPath(modelRootDir string, identity ArtifactIdentity) string {
+	return filepath.Join(modelRootDir, filepath.FromSlash(strings.Trim(strings.TrimSpace(identity.HFModelID), "/")), strings.ToLower(identity.HFCommitSHA))
+}
+
+func huggingFaceArtifactReadyMarkerPath(parentPath string) string {
+	return filepath.Join(parentPath, huggingFaceArtifactReadyMarkerFile)
+}
+
+func writeHuggingFaceArtifactReadyMarker(parentPath string) error {
+	if err := os.MkdirAll(parentPath, 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(huggingFaceArtifactReadyMarkerPath(parentPath), []byte("ready\n"), 0644)
+}
+
+func hasHuggingFaceArtifactReadyMarker(parentPath string) bool {
+	if strings.TrimSpace(parentPath) == "" {
+		return false
+	}
+	info, err := os.Stat(huggingFaceArtifactReadyMarkerPath(parentPath))
+	return err == nil && !info.IsDir()
+}
+
+func (s *Gopher) buildArtifactAttributeFromIdentity(identity ArtifactIdentity, matchedParentName string, parentPath string, childrenPaths []string) *Artifact {
+	return &Artifact{
+		Sha:           identity.HFCommitSHA,
+		Origin:        identity.toOrigin(),
+		ParentPath:    map[string]string{matchedParentName: parentPath},
+		ChildrenPaths: childrenPaths,
+	}
+}
+
+func (s *Gopher) buildSelfParentArtifactFromIdentity(ctx context.Context, task *GopherTask, identity ArtifactIdentity, destPath string) *Artifact {
+	currentModelKey := s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel)
+	childrenPaths, _, _, _ := s.parseModelConfigDataEntry(ctx, currentModelKey)
+	return s.buildArtifactAttributeFromIdentity(identity, currentModelKey, destPath, childrenPaths)
 }
 
 func (s *Gopher) shouldSkipStaleDownloadTask(task *GopherTask) (bool, bool) {
@@ -1021,6 +1224,145 @@ func (s *Gopher) findObjectStorageModelWithSamePathAndStatus(ctx context.Context
 	return "", false
 }
 
+func (s *Gopher) reuseHuggingFaceOriginArtifactIfPossible(ctx context.Context, task *GopherTask, baseModelSpec v1beta1.BaseModelSpec,
+	modelType string, namespace string, name string, destPath string, identity ArtifactIdentity) (*Artifact, bool, error) {
+	if !shouldUseHuggingFaceOriginObjectStorageReuse(task, baseModelSpec) {
+		return nil, false, nil
+	}
+	if !identity.isValid() {
+		return nil, false, nil
+	}
+
+	currentModelKey := s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel)
+	matchedModelKey, parentPath := s.handleHuggingFaceOriginReuseIfNecessary(ctx, modelType, name, namespace, identity, currentModelKey)
+	if matchedModelKey == "" || parentPath == "" {
+		return nil, false, nil
+	}
+	if _, err := os.Stat(parentPath); err != nil {
+		s.logger.Warnf("Cannot reuse Hugging Face origin artifact for %s from %s because parent path %s is not available locally: %v", name, matchedModelKey, parentPath, err)
+		return nil, false, nil
+	}
+
+	artifact, err := s.linkHuggingFaceOriginArtifact(ctx, task, name, destPath, matchedModelKey, parentPath, identity)
+	if err != nil {
+		return nil, false, err
+	}
+	return artifact, true, nil
+}
+
+func (s *Gopher) linkHuggingFaceOriginArtifact(ctx context.Context, task *GopherTask, name string, destPath string, parentKey string, parentPath string, identity ArtifactIdentity) (*Artifact, error) {
+	if filepath.Clean(destPath) != filepath.Clean(parentPath) {
+		if err := utils.CreateSymbolicLink(destPath, parentPath); err != nil {
+			s.logger.Errorf("failed to create symbolic link from %s to %s for OCI model %s with Hugging Face origin %s@%s: %s",
+				destPath, parentPath, name, identity.HFModelID, identity.HFCommitSHA, err)
+			return nil, err
+		}
+		s.logger.Infof("Successfully created symbolic link from %s to %s for OCI model %s using Hugging Face origin %s@%s",
+			destPath, parentPath, name, identity.HFModelID, identity.HFCommitSHA)
+	} else {
+		s.logger.Infof("OCI model %s already uses canonical Hugging Face artifact path %s", name, parentPath)
+	}
+
+	if err := s.recordHuggingFaceOriginChildPath(ctx, parentKey, parentPath, destPath, identity); err != nil {
+		s.logger.Errorf("fail to update configmap to add OCI model path %s to parent %s childrenPaths: %s", destPath, parentKey, err)
+		return nil, err
+	}
+	s.logger.Infof("Successfully added OCI model path %s to parent %s childrenPaths", destPath, parentKey)
+
+	currentModelKey := s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel)
+	childrenPaths, _, _, _ := s.parseModelConfigDataEntry(ctx, currentModelKey)
+	return s.buildArtifactAttributeFromIdentity(identity, parentKey, parentPath, childrenPaths), nil
+}
+
+func (s *Gopher) recordHuggingFaceOriginChildPath(ctx context.Context, parentKey string, parentPath string, childPath string, identity ArtifactIdentity) error {
+	if isHuggingFaceArtifactConfigMapKey(parentKey) {
+		return s.configMapReconciler.upsertHuggingFaceArtifactParentEntry(ctx, parentKey, identity, parentPath, childPath)
+	}
+	return s.configMapReconciler.updateConfigMapWithUpdatedChildrenPaths(ctx, parentKey, childPath)
+}
+
+func (s *Gopher) markHuggingFaceArtifactParentReady(ctx context.Context, parentKey string, parentPath string, identity ArtifactIdentity) error {
+	return s.configMapReconciler.upsertHuggingFaceArtifactParentEntry(ctx, parentKey, identity, parentPath, "")
+}
+
+func (s *Gopher) getHuggingFaceArtifactParent(ctx context.Context, identity ArtifactIdentity) (string, string, ModelStatus, bool) {
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	exists, dataEntry, err := s.configMapReconciler.getDataEntryBasedOnModelKey(ctx, parentKey)
+	if err != nil {
+		s.logger.Warnf("cannot inspect Hugging Face artifact parent %s: %v", parentKey, err)
+		return "", "", "", false
+	}
+	if !exists {
+		return "", "", "", false
+	}
+
+	var entry ModelEntry
+	if err := json.Unmarshal([]byte(dataEntry), &entry); err != nil {
+		s.logger.Warnf("cannot parse Hugging Face artifact parent %s: %v", parentKey, err)
+		return "", "", "", false
+	}
+	if entry.Config == nil {
+		return "", "", "", false
+	}
+	origin := entry.Config.Artifact.Origin
+	if origin == nil || !strings.EqualFold(origin.Type, identity.OriginType) || origin.HFModelID != identity.HFModelID || !strings.EqualFold(origin.HFCommitSHA, identity.HFCommitSHA) {
+		return "", "", "", false
+	}
+	parentPath := entry.Config.Artifact.ParentPath[parentKey]
+	if strings.TrimSpace(parentPath) == "" {
+		return "", "", "", false
+	}
+	return parentKey, parentPath, entry.Status, true
+}
+
+func (s *Gopher) getReadyHuggingFaceArtifactParent(ctx context.Context, identity ArtifactIdentity) (string, string, bool) {
+	parentKey, parentPath, status, ok := s.getHuggingFaceArtifactParent(ctx, identity)
+	return parentKey, parentPath, ok && status == ModelStatusReady
+}
+
+// requeueIfHuggingFaceArtifactParentUpdating prevents concurrent workers from
+// downloading into the same canonical parent path.
+func (s *Gopher) requeueIfHuggingFaceArtifactParentUpdating(ctx context.Context, task *GopherTask, identity ArtifactIdentity) (bool, error) {
+	parentKey, parentPath, status, ok := s.getHuggingFaceArtifactParent(ctx, identity)
+	if !ok || status != ModelStatusUpdating {
+		return false, nil
+	}
+	// The ready marker is written only after object storage download and checksum
+	// verification complete. It lets a later task recover if ConfigMap or symlink
+	// finalization failed after the canonical parent was fully downloaded.
+	if hasHuggingFaceArtifactReadyMarker(parentPath) {
+		if err := s.markHuggingFaceArtifactParentReady(ctx, parentKey, parentPath, identity); err != nil {
+			s.logger.Warnf("Hugging Face artifact parent %s has a ready marker at %s but cannot be marked Ready yet: %v", parentKey, parentPath, err)
+		} else {
+			s.logger.Infof("Recovered Hugging Face artifact parent %s from ready marker at %s", parentKey, parentPath)
+			return false, nil
+		}
+	}
+	if s.requeueSamePathInFlightReuseWait(task, parentKey) {
+		return true, nil
+	}
+	return true, fmt.Errorf("timed out waiting for Hugging Face artifact parent %s to become Ready", parentKey)
+}
+
+/*
+handleHuggingFaceOriginReuseIfNecessary determines whether an OCI model can
+reuse an existing Ready artifact by comparing provenance metadata. The source
+storage remains OCI; the Hugging Face identity is only used to prove that the
+OCI object prefix was imported from the same HF model revision.
+*/
+func (s *Gopher) handleHuggingFaceOriginReuseIfNecessary(ctx context.Context, modelType string, modelName string, namespace string, identity ArtifactIdentity, currentModelTypeAndNodeName string) (string, string) {
+	if !identity.isValid() {
+		return "", ""
+	}
+	if parentKey, parentPath, ok := s.getReadyHuggingFaceArtifactParent(ctx, identity); ok {
+		s.logger.Infof("found canonical Hugging Face artifact parent %s for model %s, parentPath is %s", parentKey, modelName, parentPath)
+		return parentKey, parentPath
+	}
+
+	s.logger.Infof("no canonical Hugging Face artifact parent found for model %s with identity %s@%s", modelName, identity.HFModelID, identity.HFCommitSHA)
+	return "", ""
+}
+
 func hasModelEntryStatus(dataEntry string, status ModelStatus) bool {
 	var entry ModelEntry
 	if err := json.Unmarshal([]byte(dataEntry), &entry); err != nil {
@@ -1284,6 +1626,70 @@ func (s *Gopher) deleteModel(destPath string, task *GopherTask) error {
 	return err
 }
 
+func (s *Gopher) hasSharedArtifactMetadata(ctx context.Context, task *GopherTask) bool {
+	if task == nil || s.configMapReconciler == nil {
+		return false
+	}
+	modelTypeAndModelName := s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel)
+	exists, dataEntry, err := s.configMapReconciler.getDataEntryBasedOnModelKey(ctx, modelTypeAndModelName)
+	if err != nil {
+		s.logger.Warnf("cannot inspect artifact metadata for %s during deletion: %v", modelTypeAndModelName, err)
+		return false
+	}
+	if !exists {
+		return false
+	}
+
+	var entry ModelEntry
+	if err := json.Unmarshal([]byte(dataEntry), &entry); err != nil {
+		s.logger.Warnf("cannot parse artifact metadata for %s during deletion: %v", modelTypeAndModelName, err)
+		return false
+	}
+	if entry.Config == nil {
+		return false
+	}
+	hasParentPath := false
+	for _, parentPath := range entry.Config.Artifact.ParentPath {
+		if strings.TrimSpace(parentPath) != "" {
+			hasParentPath = true
+			break
+		}
+	}
+	if hasParentPath || len(entry.Config.Artifact.ChildrenPaths) > 0 {
+		return true
+	}
+	return false
+}
+
+func (s *Gopher) deleteParentArtifactIfUnreferenced(ctx context.Context, isRemoveParent bool, parentName string, parentDir string) {
+	if !isRemoveParent || parentName == "" || parentDir == "" {
+		s.logger.Infof("no need to delete parent model artifact directory %s: %s", parentName, parentDir)
+		return
+	}
+	// Check whether any child path still points to the parent directory before
+	// removing the shared artifact.
+	isParentHasSymbolicLinkPointedTo, symbolicLinkSearchErr := utils.HasSymlinkPointingToDir(s.modelRootDir, parentDir)
+	if symbolicLinkSearchErr != nil {
+		s.logger.Infof("fails to search for the SymbolicLink pointing to parent Dir %s: %v. will regard the parent is still being pointed conservatively", parentDir, symbolicLinkSearchErr)
+		isParentHasSymbolicLinkPointedTo = true
+	}
+	s.logger.Infof("parent %s:%s has other directory points to: %v", parentName, parentDir, isParentHasSymbolicLinkPointedTo)
+	if isParentHasSymbolicLinkPointedTo {
+		return
+	}
+
+	if err := s.deleteModel(parentDir, nil); err != nil {
+		s.logger.Errorf("fail to delete parent model artifact directory %s: %s", parentName, parentDir)
+		return
+	}
+	s.logger.Infof("Successfully delete parent model artifact directory %s: %s", parentName, parentDir)
+	if isHuggingFaceArtifactConfigMapKey(parentName) {
+		if err := s.configMapReconciler.deleteConfigMapDataEntry(ctx, parentName); err != nil {
+			s.logger.Errorf("failed to delete Hugging Face artifact parent entry %s from ConfigMap: %v", parentName, err)
+		}
+	}
+}
+
 // isReservingModelArtifact determines whether to preserve the model artifact directory during deletion.
 // Behavior:
 //   - Returns true if either ClusterBaseModel or BaseModel has the label models.ome/reserve-model-artifact
@@ -1337,6 +1743,11 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 
 	// fetch sha value based on model ID from Huggingface model API
 	shaStr, isShaAvailable := s.fetchSha(ctx, hfComponents.ModelID, name)
+	hfOriginIdentity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   hfComponents.ModelID,
+		HFCommitSHA: strings.ToLower(shaStr),
+	}
 	isReuseEligible, matchedModelTypeAndModeName, parentPath := s.isEligibleForOptimization(ctx, task, baseModelSpec, modelType, namespace, isShaAvailable, shaStr, name)
 
 	var artifact *Artifact
@@ -1358,7 +1769,7 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 
 		childrenPaths := make([]string, 0)
 		childrenPaths, _, _, _ = s.parseModelConfigDataEntry(ctx, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel))
-		artifact = s.modelConfigParser.buildArtifactAttribute(shaStr, matchedModelTypeAndModeName, parentPath, childrenPaths)
+		artifact = s.buildArtifactAttributeFromIdentity(hfOriginIdentity, matchedModelTypeAndModeName, parentPath, childrenPaths)
 	} else {
 		childrenPaths := make([]string, 0)
 		// handle the case when download Policy is updated from ReuseIfExists to AlwaysDownload
@@ -1510,7 +1921,7 @@ func (s *Gopher) processHuggingFaceModel(ctx context.Context, task *GopherTask, 
 
 		s.logger.Infof("Successfully downloaded HuggingFace model %s to %s",
 			modelInfo, downloadPath)
-		artifact = s.modelConfigParser.buildArtifactAttribute(shaStr, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel), destPath, childrenPaths)
+		artifact = s.buildArtifactAttributeFromIdentity(hfOriginIdentity, s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel), destPath, childrenPaths)
 	}
 
 	// Parse model config and update ConfigMap
@@ -1796,10 +2207,19 @@ func (s *Gopher) isRemoveParentArtifactDirectory(ctx context.Context, hasChildre
 	}
 
 	// If the parent entry still exists in the node ConfigMap, don't remove.
-	exists, _, err := s.configMapReconciler.getDataEntryBasedOnModelKey(ctx, parentName)
+	exists, dataEntry, err := s.configMapReconciler.getDataEntryBasedOnModelKey(ctx, parentName)
 	if err != nil && strings.Contains(err.Error(), "cannot retrieve node configmap") {
 		s.logger.Infof("cannot retrieve node configmap and cannot determine parent entry existence, will not remove artifact")
 		return false
+	}
+	if exists && isHuggingFaceArtifactConfigMapKey(parentName) {
+		_, parentChildrenPaths, parseErr := s.configMapReconciler.getParentPathAndChildrenPaths(parentName, dataEntry)
+		if parseErr != nil {
+			s.logger.Infof("cannot parse Hugging Face artifact parent entry %s, will not remove artifact: %v", parentName, parseErr)
+			return false
+		}
+		s.logger.Infof("Hugging Face artifact parent entry %s:%s has children paths: %v", parentName, parentDir, parentChildrenPaths)
+		return len(parentChildrenPaths) == 0
 	}
 	s.logger.Infof("parent entry %s:%s exists on node configmap: %v", parentName, parentDir, exists)
 	return !exists

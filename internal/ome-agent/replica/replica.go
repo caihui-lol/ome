@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"sigs.k8s.io/ome/internal/ome-agent/replica/common"
 
@@ -19,6 +20,9 @@ const (
 
 	SourceStorageConfigKeyName = "source"
 	TargetStorageConfigKeyName = "target"
+
+	targetArtifactLockPollInterval = 30 * time.Second
+	targetArtifactLockWaitTimeout  = 72 * time.Hour
 )
 
 var (
@@ -26,12 +30,26 @@ var (
 	uploadCompletionMarkerFunc = func(dataStore *ociobjectstore.OCIOSDataStore, source string, target ociobjectstore.ObjectURI) error {
 		return dataStore.Upload(source, target)
 	}
+	tryAcquireArtifactUploadLockFunc = func(dataStore *ociobjectstore.OCIOSDataStore, source string, target ociobjectstore.ObjectURI) (bool, error) {
+		return dataStore.UploadIfAbsent(source, target)
+	}
+	deleteArtifactUploadLockFunc = func(dataStore *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI) error {
+		return dataStore.DeleteObject(target)
+	}
+	targetArtifactStateFunc = defaultTargetArtifactState
+	sleepFunc               = time.Sleep
+	nowFunc                 = time.Now
 )
 
 type ReplicaAgent struct {
 	Logger           logging.Interface
 	Config           Config
 	ReplicationInput common.ReplicationInput
+}
+
+type targetArtifactState struct {
+	Complete     bool
+	UploadLocked bool
 }
 
 // NewReplicaAgent constructs a new replica agent from the given configuration.
@@ -97,6 +115,18 @@ func (r *ReplicaAgent) Start() error {
 		return err
 	}
 
+	lockAcquired, skipReplication, err := r.prepareTargetArtifactUpload()
+	if err != nil {
+		r.writeTerminationLog(err.Error())
+		return err
+	}
+	if skipReplication {
+		return nil
+	}
+	if lockAcquired {
+		defer r.releaseTargetArtifactUploadLock()
+	}
+
 	sourceObjs, err := r.listSourceObjects()
 	if err != nil {
 		r.writeTerminationLog(err.Error())
@@ -126,6 +156,120 @@ func (r *ReplicaAgent) Start() error {
 	return nil
 }
 
+func (r *ReplicaAgent) prepareTargetArtifactUpload() (bool, bool, error) {
+	if r.ReplicationInput.TargetStorageType != storage.StorageTypeOCI {
+		return false, false, nil
+	}
+	if r.Config.Target.OCIOSDataStore == nil {
+		return false, false, fmt.Errorf("target OCI object store data store is nil")
+	}
+
+	state, err := r.targetArtifactState()
+	if err != nil {
+		return false, false, fmt.Errorf("failed to inspect target artifact state: %w", err)
+	}
+	if state.Complete {
+		r.Logger.Infof("Target artifact is already complete; skipping replication")
+		return false, true, nil
+	}
+
+	for {
+		acquired, err := r.acquireTargetArtifactUploadLock()
+		if err != nil {
+			return false, false, err
+		}
+		if acquired {
+			return true, false, nil
+		}
+
+		r.Logger.Infof("Target artifact upload lock already exists; waiting for completion marker")
+		state, err = r.waitForTargetArtifactStateChange()
+		if err != nil {
+			return false, false, err
+		}
+		if state.Complete {
+			r.Logger.Infof("Target artifact completed while waiting for upload lock; skipping replication")
+			return false, true, nil
+		}
+	}
+}
+
+func (r *ReplicaAgent) acquireTargetArtifactUploadLock() (bool, error) {
+	lockURI := r.targetArtifactUploadLockURI()
+	r.Logger.Infof("Acquiring target artifact upload lock at oci://n/%s/b/%s/o/%s", lockURI.Namespace, lockURI.BucketName, lockURI.ObjectName)
+	acquired, err := tryAcquireArtifactUploadLockFunc(
+		r.Config.Target.OCIOSDataStore,
+		constants.ArtifactUploadLockBody,
+		lockURI,
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to acquire target artifact upload lock: %w", err)
+	}
+	return acquired, nil
+}
+
+func (r *ReplicaAgent) releaseTargetArtifactUploadLock() {
+	lockURI := r.targetArtifactUploadLockURI()
+	if err := deleteArtifactUploadLockFunc(r.Config.Target.OCIOSDataStore, lockURI); err != nil {
+		r.Logger.Errorf("Failed to release target artifact upload lock at oci://n/%s/b/%s/o/%s: %v", lockURI.Namespace, lockURI.BucketName, lockURI.ObjectName, err)
+	}
+}
+
+func (r *ReplicaAgent) waitForTargetArtifactStateChange() (targetArtifactState, error) {
+	deadline := nowFunc().Add(targetArtifactLockWaitTimeout)
+	for {
+		if !nowFunc().Before(deadline) {
+			return targetArtifactState{}, fmt.Errorf("timed out waiting for target artifact completion marker")
+		}
+		sleepFunc(targetArtifactLockPollInterval)
+
+		state, err := r.targetArtifactState()
+		if err != nil {
+			return targetArtifactState{}, fmt.Errorf("failed to inspect target artifact state while waiting for upload lock: %w", err)
+		}
+		if state.Complete || !state.UploadLocked {
+			return state, nil
+		}
+	}
+}
+
+func (r *ReplicaAgent) targetArtifactState() (targetArtifactState, error) {
+	return targetArtifactStateFunc(r.Config.Target.OCIOSDataStore, r.targetArtifactPrefixURI())
+}
+
+func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI) (targetArtifactState, error) {
+	objects, err := dataStore.ListObjects(target)
+	if err != nil {
+		return targetArtifactState{}, err
+	}
+
+	completeMarkerName := normalizeObjectPrefix(target.Prefix) + constants.ArtifactCompleteMarkerFileName
+	uploadLockName := normalizeObjectPrefix(target.Prefix) + constants.ArtifactUploadLockFileName
+	var hasCompleteMarker bool
+	var hasArtifactObject bool
+	var hasUploadLock bool
+	for _, object := range objects {
+		if object.Name == nil {
+			continue
+		}
+		switch *object.Name {
+		case completeMarkerName:
+			hasCompleteMarker = true
+		case uploadLockName:
+			hasUploadLock = true
+		default:
+			if !constants.IsInternalArtifactObjectName(*object.Name) {
+				hasArtifactObject = true
+			}
+		}
+	}
+
+	return targetArtifactState{
+		Complete:     hasCompleteMarker && hasArtifactObject,
+		UploadLocked: hasUploadLock,
+	}, nil
+}
+
 func (r *ReplicaAgent) writeCompletionMarker() error {
 	if r.ReplicationInput.TargetStorageType != storage.StorageTypeOCI {
 		r.Logger.Infof("Skipping target artifact completion marker for non-OCI target storage type %s", r.ReplicationInput.TargetStorageType)
@@ -149,6 +293,24 @@ func (r *ReplicaAgent) targetArtifactCompleteMarkerURI() ociobjectstore.ObjectUR
 		Namespace:  r.ReplicationInput.Target.Namespace,
 		BucketName: r.ReplicationInput.Target.BucketName,
 		ObjectName: normalizeObjectPrefix(r.ReplicationInput.Target.Prefix) + constants.ArtifactCompleteMarkerFileName,
+		Region:     r.ReplicationInput.Target.Region,
+	}
+}
+
+func (r *ReplicaAgent) targetArtifactPrefixURI() ociobjectstore.ObjectURI {
+	return ociobjectstore.ObjectURI{
+		Namespace:  r.ReplicationInput.Target.Namespace,
+		BucketName: r.ReplicationInput.Target.BucketName,
+		Prefix:     normalizeObjectPrefix(r.ReplicationInput.Target.Prefix),
+		Region:     r.ReplicationInput.Target.Region,
+	}
+}
+
+func (r *ReplicaAgent) targetArtifactUploadLockURI() ociobjectstore.ObjectURI {
+	return ociobjectstore.ObjectURI{
+		Namespace:  r.ReplicationInput.Target.Namespace,
+		BucketName: r.ReplicationInput.Target.BucketName,
+		ObjectName: normalizeObjectPrefix(r.ReplicationInput.Target.Prefix) + constants.ArtifactUploadLockFileName,
 		Region:     r.ReplicationInput.Target.Region,
 	}
 }
@@ -216,7 +378,7 @@ func (r *ReplicaAgent) listSourceObjects() ([]common.ReplicationObject, error) {
 func filterInternalArtifactReplicationObjects(objects []common.ReplicationObject) []common.ReplicationObject {
 	filtered := make([]common.ReplicationObject, 0, len(objects))
 	for _, object := range objects {
-		if constants.IsArtifactCompleteMarkerObjectName(object.GetName()) {
+		if constants.IsInternalArtifactObjectName(object.GetName()) {
 			continue
 		}
 		filtered = append(filtered, object)

@@ -123,10 +123,20 @@ const (
 	TensorRTLLM                    = "tensorrtllm"
 	ArtifactCompleteMarkerFileName = ".ome-artifact-complete"
 	ArtifactCompleteMarkerBody     = "complete\n"
+	ArtifactUploadLockFileName     = ".ome-artifact-upload.lock"
+	ArtifactUploadLockBody         = "uploading\n"
 )
 
 func IsArtifactCompleteMarkerObjectName(objectName string) bool {
 	return objectName == ArtifactCompleteMarkerFileName || strings.HasSuffix(objectName, "/"+ArtifactCompleteMarkerFileName)
+}
+
+func IsArtifactUploadLockObjectName(objectName string) bool {
+	return objectName == ArtifactUploadLockFileName || strings.HasSuffix(objectName, "/"+ArtifactUploadLockFileName)
+}
+
+func IsInternalArtifactObjectName(objectName string) bool {
+	return IsArtifactCompleteMarkerObjectName(objectName) || IsArtifactUploadLockObjectName(objectName)
 }
 
 // InferenceService Annotations

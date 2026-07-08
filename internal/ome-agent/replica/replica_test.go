@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"sigs.k8s.io/ome/pkg/xet"
 
@@ -710,6 +711,54 @@ func TestReplicaAgent_StartReturnsErrorWhenCompletionMarkerUploadFails(t *testin
 	assert.Contains(t, err.Error(), "marker upload failed")
 }
 
+func TestReplicaAgent_StartSkipsReplicationWhenTargetArtifactUploadLockCompletes(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	replicatorCalled := false
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		replicatorCalled = true
+		return &fakeReplicator{}, nil
+	}
+	tryAcquireArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) (bool, error) {
+		return false, nil
+	}
+	stateCalls := 0
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		stateCalls++
+		if stateCalls == 1 {
+			return targetArtifactState{}, nil
+		}
+		return targetArtifactState{Complete: true, UploadLocked: true}, nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	assert.False(t, replicatorCalled)
+	assert.Equal(t, 2, stateCalls)
+}
+
+func TestReplicaAgent_StartReleasesTargetArtifactUploadLockWhenReplicationFails(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return &fakeReplicator{err: errors.New("replication failed")}, nil
+	}
+
+	released := false
+	deleteArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI) error {
+		released = true
+		assert.Equal(t, "target-models/"+constants.ArtifactUploadLockFileName, target.ObjectName)
+		return nil
+	}
+
+	err := agent.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replication failed")
+	assert.True(t, released)
+}
+
 func TestReplicaAgent_StartSkipsCompletionMarkerForNonOCITarget(t *testing.T) {
 	agent, cleanup := newTestAgentForCompletionMarker(t)
 	defer cleanup()
@@ -742,12 +791,14 @@ func TestFilterInternalArtifactReplicationObjectsSkipsCompletionMarker(t *testin
 	configName := "models/config.json"
 	weightName := "models/model.safetensors"
 	markerName := "models/" + constants.ArtifactCompleteMarkerFileName
+	lockName := "models/" + constants.ArtifactUploadLockFileName
 	rootMarkerName := constants.ArtifactCompleteMarkerFileName
 	size := int64(1)
 
 	objects := []common.ReplicationObject{
 		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &configName, Size: &size}},
 		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &markerName, Size: &size}},
+		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &lockName, Size: &size}},
 		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &weightName, Size: &size}},
 		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &rootMarkerName, Size: &size}},
 	}
@@ -764,10 +815,31 @@ func newTestAgentForCompletionMarker(t *testing.T) (*ReplicaAgent, func()) {
 
 	oldNewReplicatorFunc := newReplicatorFunc
 	oldUploadCompletionMarkerFunc := uploadCompletionMarkerFunc
+	oldTryAcquireArtifactUploadLockFunc := tryAcquireArtifactUploadLockFunc
+	oldDeleteArtifactUploadLockFunc := deleteArtifactUploadLockFunc
+	oldTargetArtifactStateFunc := targetArtifactStateFunc
+	oldSleepFunc := sleepFunc
+	oldNowFunc := nowFunc
 	cleanup := func() {
 		newReplicatorFunc = oldNewReplicatorFunc
 		uploadCompletionMarkerFunc = oldUploadCompletionMarkerFunc
+		tryAcquireArtifactUploadLockFunc = oldTryAcquireArtifactUploadLockFunc
+		deleteArtifactUploadLockFunc = oldDeleteArtifactUploadLockFunc
+		targetArtifactStateFunc = oldTargetArtifactStateFunc
+		sleepFunc = oldSleepFunc
+		nowFunc = oldNowFunc
 	}
+	tryAcquireArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) (bool, error) {
+		return true, nil
+	}
+	deleteArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) error {
+		return nil
+	}
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		return targetArtifactState{}, nil
+	}
+	sleepFunc = func(time.Duration) {}
+	nowFunc = time.Now
 
 	localPath := t.TempDir()
 	sourceDir := filepath.Join(localPath, "source-model")

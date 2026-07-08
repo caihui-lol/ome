@@ -447,7 +447,7 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 			}
 			if useHuggingFaceOriginReuse {
 				hfArtifactParentKey = huggingFaceArtifactConfigMapKey(hfOriginIdentity)
-				hfArtifactParentPath = canonicalHuggingFaceArtifactPath(s.modelRootDir, hfOriginIdentity)
+				hfArtifactParentPath = canonicalHuggingFaceArtifactPathForTask(task, s.modelRootDir, destPath, hfOriginIdentity)
 				s.logger.Infof("OCI model %s will use canonical Hugging Face artifact parent %s at %s",
 					modelInfo, hfArtifactParentKey, hfArtifactParentPath)
 			}
@@ -852,7 +852,17 @@ func sanitizeConfigMapKeyComponent(value string) string {
 	return sanitized
 }
 
-func canonicalHuggingFaceArtifactPath(modelRootDir string, identity ArtifactIdentity) string {
+func canonicalHuggingFaceArtifactPath(destPath string, identity ArtifactIdentity) string {
+	return filepath.Join(filepath.Dir(destPath), constants.ModelArtifactsDirectory, filepath.FromSlash(strings.Trim(strings.TrimSpace(identity.HFModelID), "/")), strings.ToLower(identity.HFCommitSHA))
+}
+
+// BaseModel downloads can have model-local child paths under a local store, so
+// place shared HF parents in that same store. ClusterBaseModel keeps the
+// existing model-root layout for backward compatibility.
+func canonicalHuggingFaceArtifactPathForTask(task *GopherTask, modelRootDir string, destPath string, identity ArtifactIdentity) string {
+	if task != nil && task.BaseModel != nil {
+		return canonicalHuggingFaceArtifactPath(destPath, identity)
+	}
 	return filepath.Join(modelRootDir, filepath.FromSlash(strings.Trim(strings.TrimSpace(identity.HFModelID), "/")), strings.ToLower(identity.HFCommitSHA))
 }
 

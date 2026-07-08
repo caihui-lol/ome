@@ -840,15 +840,32 @@ func TestHuggingFaceArtifactKeyAndCanonicalPath(t *testing.T) {
 		HFModelID:   "deepseek-ai/DeepSeek-V4-Pro",
 		HFCommitSHA: sha,
 	}
-	root := t.TempDir()
+	destPath := filepath.Join(t.TempDir(), "customer-model-store", "model-ocid")
 
 	key := huggingFaceArtifactConfigMapKey(identity)
-	path := canonicalHuggingFaceArtifactPath(root, identity)
+	path := canonicalHuggingFaceArtifactPath(destPath, identity)
 
 	assert.Contains(t, key, "artifact.huggingface.deepseek-ai.DeepSeek-V4-Pro.")
 	assert.Contains(t, key, "."+sha)
 	assert.NotContains(t, key, "/")
-	assert.Equal(t, filepath.Join(root, "deepseek-ai", "DeepSeek-V4-Pro", sha), path)
+	assert.Equal(t, filepath.Join(filepath.Dir(destPath), constants.ModelArtifactsDirectory, "deepseek-ai", "DeepSeek-V4-Pro", sha), path)
+}
+
+func TestHuggingFaceArtifactParentPathForTaskPreservesClusterBaseModelLayout(t *testing.T) {
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   "deepseek-ai/DeepSeek-V4-Pro",
+		HFCommitSHA: sha,
+	}
+	root := t.TempDir()
+	destPath := filepath.Join(root, "customer-model-store", "model-ocid")
+
+	baseModelPath := canonicalHuggingFaceArtifactPathForTask(&GopherTask{BaseModel: &v1beta1.BaseModel{}}, root, destPath, identity)
+	clusterBaseModelPath := canonicalHuggingFaceArtifactPathForTask(&GopherTask{ClusterBaseModel: &v1beta1.ClusterBaseModel{}}, root, destPath, identity)
+
+	assert.Equal(t, filepath.Join(filepath.Dir(destPath), constants.ModelArtifactsDirectory, "deepseek-ai", "DeepSeek-V4-Pro", sha), baseModelPath)
+	assert.Equal(t, filepath.Join(root, "deepseek-ai", "DeepSeek-V4-Pro", sha), clusterBaseModelPath)
 }
 
 func TestHuggingFaceArtifactConfigMapKeyAvoidsModelIDSanitizationCollision(t *testing.T) {
@@ -923,8 +940,8 @@ func TestReuseHuggingFaceOriginArtifactUsesArtifactParentEntry(t *testing.T) {
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "models", "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	writeMinimalModelConfig(t, parentPath)
 
 	artifactKey := huggingFaceArtifactConfigMapKey(identity)
@@ -1029,7 +1046,7 @@ func TestGetHuggingFaceArtifactParentReturnsUpdatingParent(t *testing.T) {
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
+	parentPath := canonicalHuggingFaceArtifactPath(filepath.Join(tmpDir, "child"), identity)
 	parentKey := huggingFaceArtifactConfigMapKey(identity)
 	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{
 		parentKey: entryJSONWithOrigin(ModelStatusUpdating, modelID, sha, parentKey, parentPath, []string{}),
@@ -1052,7 +1069,7 @@ func TestReserveHuggingFaceArtifactParentEntryCreatesUpdatingParent(t *testing.T
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
+	parentPath := canonicalHuggingFaceArtifactPath(filepath.Join(tmpDir, "child"), identity)
 	parentKey := huggingFaceArtifactConfigMapKey(identity)
 	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{}))
 
@@ -1079,8 +1096,8 @@ func TestProcessTaskRequeuesWhenHuggingFaceArtifactParentIsUpdating(t *testing.T
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	parentKey := huggingFaceArtifactConfigMapKey(identity)
 	model := &v1beta1.BaseModel{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1134,8 +1151,8 @@ func TestProcessTaskRecoversUpdatingHuggingFaceArtifactParentWithReadyMarker(t *
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	writeMinimalModelConfig(t, parentPath)
 	require.NoError(t, os.WriteFile(huggingFaceArtifactReadyMarkerPath(parentPath), []byte("ready\n"), 0644))
 
@@ -1195,8 +1212,8 @@ func TestProcessTaskWithOptionsReusesOCIArtifactByHuggingFaceOrigin(t *testing.T
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	writeMinimalModelConfig(t, parentPath)
 
 	parentKey := huggingFaceArtifactConfigMapKey(identity)
@@ -1262,8 +1279,8 @@ func TestReuseHuggingFaceOriginArtifactCreatesSymlinkAndUpdatesChildren(t *testi
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	require.NoError(t, os.MkdirAll(parentPath, 0755))
 	require.NoError(t, os.WriteFile(filepath.Join(parentPath, "config.json"), []byte("{}"), 0644))
 
@@ -1401,8 +1418,8 @@ func TestProcessTaskDeletesLastOCIOriginChildAndRemovesArtifactParentEntry(t *te
 		HFCommitSHA: sha,
 	}
 	tmpDir := t.TempDir()
-	parentPath := canonicalHuggingFaceArtifactPath(tmpDir, identity)
 	childPath := filepath.Join(tmpDir, "models", "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
 	writeMinimalModelConfig(t, parentPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(childPath), 0755))
 	require.NoError(t, os.Symlink(parentPath, childPath))

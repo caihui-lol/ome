@@ -41,6 +41,7 @@ const (
 
 	huggingFaceArtifactConfigMapKeyPrefix = "artifact.huggingface."
 	huggingFaceArtifactReadyMarkerFile    = ".ome-hf-artifact-ready"
+	artifactCompleteMarkerFileName        = ".ome-artifact-complete"
 )
 
 type GopherTask struct {
@@ -1477,6 +1478,7 @@ func (s *Gopher) downloadModel(ctx context.Context, uri *ociobjectstore.ObjectUR
 	if err != nil {
 		return fmt.Errorf("failed to list objects: %w", err)
 	}
+	objects = filterInternalArtifactObjectSummaries(objects)
 
 	if len(objects) == 0 {
 		return fmt.Errorf("no objects found under namespace %s, bucket %s, object prefix %s", uri.Namespace, uri.BucketName, uri.Prefix)
@@ -1577,6 +1579,21 @@ func (s *Gopher) downloadModel(ctx context.Context, uri *ociobjectstore.ObjectUR
 	s.logger.Infof("All files downloaded and verified successfully (%d files, %d bytes, verification took %v)",
 		len(objects), totalBytes, verificationDuration.Round(time.Millisecond))
 	return nil
+}
+
+func filterInternalArtifactObjectSummaries(objects []objectstorage.ObjectSummary) []objectstorage.ObjectSummary {
+	filtered := make([]objectstorage.ObjectSummary, 0, len(objects))
+	for _, object := range objects {
+		if object.Name != nil && isArtifactCompleteMarkerObjectName(*object.Name) {
+			continue
+		}
+		filtered = append(filtered, object)
+	}
+	return filtered
+}
+
+func isArtifactCompleteMarkerObjectName(objectName string) bool {
+	return objectName == artifactCompleteMarkerFileName || strings.HasSuffix(objectName, "/"+artifactCompleteMarkerFileName)
 }
 
 func (s *Gopher) verifyDownloadedFiles(ociOSDataStore *ociobjectstore.OCIOSDataStore, uris []ociobjectstore.ObjectURI, destPath string, task *GopherTask) map[string]error {

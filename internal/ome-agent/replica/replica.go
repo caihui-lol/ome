@@ -8,7 +8,9 @@ import (
 
 	"sigs.k8s.io/ome/internal/ome-agent/replica/common"
 
+	"sigs.k8s.io/ome/pkg/constants"
 	"sigs.k8s.io/ome/pkg/logging"
+	"sigs.k8s.io/ome/pkg/ociobjectstore"
 	"sigs.k8s.io/ome/pkg/utils/storage"
 )
 
@@ -17,6 +19,13 @@ const (
 
 	SourceStorageConfigKeyName = "source"
 	TargetStorageConfigKeyName = "target"
+)
+
+var (
+	newReplicatorFunc          = NewReplicator
+	uploadCompletionMarkerFunc = func(dataStore *ociobjectstore.OCIOSDataStore, source string, target ociobjectstore.ObjectURI) error {
+		return dataStore.Upload(source, target)
+	}
 )
 
 type ReplicaAgent struct {
@@ -82,6 +91,12 @@ func NewReplicaAgent(config *Config) (*ReplicaAgent, error) {
 func (r *ReplicaAgent) Start() error {
 	r.Logger.Infof("Start replication from %s %v to %s %v with checksum config %+v", r.ReplicationInput.SourceStorageType, r.ReplicationInput.Source, r.ReplicationInput.TargetStorageType, r.ReplicationInput.Target, r.Config.Target.ChecksumConfig)
 
+	if r.Config.NumConnections <= 0 {
+		err := fmt.Errorf("num_connections must be greater than 0")
+		r.writeTerminationLog(err.Error())
+		return err
+	}
+
 	sourceObjs, err := r.listSourceObjects()
 	if err != nil {
 		r.writeTerminationLog(err.Error())
@@ -90,7 +105,7 @@ func (r *ReplicaAgent) Start() error {
 
 	r.validateModelSize(sourceObjs)
 
-	replicatorImp, err := NewReplicator(r)
+	replicatorImp, err := newReplicatorFunc(r)
 	if err != nil {
 		r.writeTerminationLog(err.Error())
 		return err
@@ -99,8 +114,50 @@ func (r *ReplicaAgent) Start() error {
 	err = replicatorImp.Replicate(sourceObjs)
 	if err != nil {
 		r.writeTerminationLog(err.Error())
+		return err
 	}
-	return err
+
+	if err = r.writeCompletionMarker(); err != nil {
+		err = fmt.Errorf("failed to write target artifact completion marker: %w", err)
+		r.writeTerminationLog(err.Error())
+		return err
+	}
+
+	return nil
+}
+
+func (r *ReplicaAgent) writeCompletionMarker() error {
+	if r.ReplicationInput.TargetStorageType != storage.StorageTypeOCI {
+		r.Logger.Infof("Skipping target artifact completion marker for non-OCI target storage type %s", r.ReplicationInput.TargetStorageType)
+		return nil
+	}
+	if r.Config.Target.OCIOSDataStore == nil {
+		return fmt.Errorf("target OCI object store data store is nil")
+	}
+
+	markerURI := r.targetArtifactCompleteMarkerURI()
+	r.Logger.Infof("Writing target artifact completion marker to oci://n/%s/b/%s/o/%s", markerURI.Namespace, markerURI.BucketName, markerURI.ObjectName)
+	return uploadCompletionMarkerFunc(
+		r.Config.Target.OCIOSDataStore,
+		constants.ArtifactCompleteMarkerBody,
+		markerURI,
+	)
+}
+
+func (r *ReplicaAgent) targetArtifactCompleteMarkerURI() ociobjectstore.ObjectURI {
+	return ociobjectstore.ObjectURI{
+		Namespace:  r.ReplicationInput.Target.Namespace,
+		BucketName: r.ReplicationInput.Target.BucketName,
+		ObjectName: normalizeObjectPrefix(r.ReplicationInput.Target.Prefix) + constants.ArtifactCompleteMarkerFileName,
+		Region:     r.ReplicationInput.Target.Region,
+	}
+}
+
+func normalizeObjectPrefix(prefix string) string {
+	if prefix == "" || strings.HasSuffix(prefix, "/") {
+		return prefix
+	}
+	return prefix + "/"
 }
 
 func (r *ReplicaAgent) writeTerminationLog(message string) {
@@ -132,8 +189,10 @@ func (r *ReplicaAgent) listSourceObjects() ([]common.ReplicationObject, error) {
 		if err != nil {
 			return nil, err
 		}
-		r.Logger.Infof("Listed %d model weight objects under prefix %s", len(listOfObjectSummary), r.ReplicationInput.Source.Prefix)
-		return common.ConvertToReplicationObjectsFromObjectSummary(listOfObjectSummary), nil
+		sourceObjects := common.ConvertToReplicationObjectsFromObjectSummary(listOfObjectSummary)
+		sourceObjects = filterInternalArtifactReplicationObjects(sourceObjects)
+		r.Logger.Infof("Listed %d model weight objects under prefix %s", len(sourceObjects), r.ReplicationInput.Source.Prefix)
+		return sourceObjects, nil
 	case storage.StorageTypeHuggingFace:
 		repoFiles, err := r.Config.Source.HubClient.ListFiles(r.ReplicationInput.Source.BucketName, r.ReplicationInput.Source.Prefix)
 		if err != nil {
@@ -152,6 +211,17 @@ func (r *ReplicaAgent) listSourceObjects() ([]common.ReplicationObject, error) {
 	default:
 		return nil, fmt.Errorf("unsupported source storage type: %s", string(r.ReplicationInput.SourceStorageType))
 	}
+}
+
+func filterInternalArtifactReplicationObjects(objects []common.ReplicationObject) []common.ReplicationObject {
+	filtered := make([]common.ReplicationObject, 0, len(objects))
+	for _, object := range objects {
+		if constants.IsArtifactCompleteMarkerObjectName(object.GetName()) {
+			continue
+		}
+		filtered = append(filtered, object)
+	}
+	return filtered
 }
 
 func (r *ReplicaAgent) validateModelSize(objects []common.ReplicationObject) {

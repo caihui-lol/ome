@@ -119,9 +119,15 @@ var (
 
 // Model agent Constants
 const (
-	AgentConfigMapKeyName = "agent"
-	TensorRTLLM           = "tensorrtllm"
+	AgentConfigMapKeyName          = "agent"
+	TensorRTLLM                    = "tensorrtllm"
+	ArtifactCompleteMarkerFileName = ".ome-artifact-complete"
+	ArtifactCompleteMarkerBody     = "complete\n"
 )
+
+func IsArtifactCompleteMarkerObjectName(objectName string) bool {
+	return objectName == ArtifactCompleteMarkerFileName || strings.HasSuffix(objectName, "/"+ArtifactCompleteMarkerFileName)
+}
 
 // InferenceService Annotations
 var (

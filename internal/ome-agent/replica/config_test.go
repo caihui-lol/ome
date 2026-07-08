@@ -385,6 +385,24 @@ func TestConfig_Validate(t *testing.T) {
 			expectError: true,
 		},
 		{
+			name: "invalid NumConnections",
+			setupConfig: func() *Config {
+				return &Config{
+					LocalPath:            "/test/path",
+					DownloadSizeLimitGB:  100,
+					EnableSizeLimitCheck: true,
+					NumConnections:       0,
+					Source: SourceStruct{
+						StorageURIStr: validSourceURI,
+					},
+					Target: TargetStruct{
+						StorageURIStr: validTargetURI,
+					},
+				}
+			},
+			expectError: true,
+		},
+		{
 			name: "invalid source storage URI",
 			setupConfig: func() *Config {
 				return &Config{

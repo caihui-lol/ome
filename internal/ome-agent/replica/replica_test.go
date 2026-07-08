@@ -1,18 +1,24 @@
 package replica
 
 import (
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"sigs.k8s.io/ome/pkg/xet"
 
 	"sigs.k8s.io/ome/internal/ome-agent/replica/common"
+	"sigs.k8s.io/ome/internal/ome-agent/replica/replicator"
 
 	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"sigs.k8s.io/ome/pkg/afero"
+	"sigs.k8s.io/ome/pkg/constants"
 	"sigs.k8s.io/ome/pkg/ociobjectstore"
 	"sigs.k8s.io/ome/pkg/principals"
 	testingPkg "sigs.k8s.io/ome/pkg/testing"
@@ -55,6 +61,16 @@ func createMockOCIOSDataStore() *ociobjectstore.OCIOSDataStore {
 	return &ociobjectstore.OCIOSDataStore{
 		Config: config,
 	}
+}
+
+type fakeReplicator struct {
+	err     error
+	objects []common.ReplicationObject
+}
+
+func (f *fakeReplicator) Replicate(objects []common.ReplicationObject) error {
+	f.objects = objects
+	return f.err
 }
 
 func TestNewReplicaAgent(t *testing.T) {
@@ -613,4 +629,182 @@ func TestReplicaAgent_Start(t *testing.T) {
 
 	err := testAgent.Start()
 	assert.NoError(t, err)
+}
+
+func TestReplicaAgent_StartReturnsErrorWhenNumConnectionsInvalid(t *testing.T) {
+	mockLogger := testingPkg.SetupMockLogger()
+	agent := &ReplicaAgent{
+		Logger: mockLogger,
+		Config: Config{
+			AnotherLogger:  mockLogger,
+			NumConnections: 0,
+		},
+	}
+
+	err := agent.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "num_connections")
+}
+
+func TestReplicaAgent_StartWritesCompletionMarkerAfterSuccessfulOCITargetReplication(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	fake := &fakeReplicator{}
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return fake, nil
+	}
+
+	var markerSource string
+	var markerTarget ociobjectstore.ObjectURI
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, source string, target ociobjectstore.ObjectURI) error {
+		markerSource = source
+		markerTarget = target
+		return nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	require.Len(t, fake.objects, 1)
+	assert.Equal(t, constants.ArtifactCompleteMarkerBody, markerSource)
+	assert.Equal(t, "tgt-ns", markerTarget.Namespace)
+	assert.Equal(t, "tgt-bucket", markerTarget.BucketName)
+	assert.Equal(t, "target-models/"+constants.ArtifactCompleteMarkerFileName, markerTarget.ObjectName)
+	assert.Equal(t, "us-ashburn-1", markerTarget.Region)
+}
+
+func TestReplicaAgent_StartSkipsCompletionMarkerWhenReplicationFails(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return &fakeReplicator{err: errors.New("replication failed")}, nil
+	}
+
+	markerWritten := false
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) error {
+		markerWritten = true
+		return nil
+	}
+
+	err := agent.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "replication failed")
+	assert.False(t, markerWritten)
+}
+
+func TestReplicaAgent_StartReturnsErrorWhenCompletionMarkerUploadFails(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return &fakeReplicator{}, nil
+	}
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) error {
+		return errors.New("marker upload failed")
+	}
+
+	err := agent.Start()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to write target artifact completion marker")
+	assert.Contains(t, err.Error(), "marker upload failed")
+}
+
+func TestReplicaAgent_StartSkipsCompletionMarkerForNonOCITarget(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	agent.ReplicationInput.TargetStorageType = storage.StorageTypePVC
+	agent.ReplicationInput.Target = ociobjectstore.ObjectURI{
+		BucketName: "target-pvc",
+		Prefix:     "target-model",
+	}
+	agent.Config.Target = TargetStruct{
+		StorageURIStr: "pvc://target-pvc/target-model",
+		PVCFileSystem: afero.NewOsFs().(*afero.OsFs),
+	}
+
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return &fakeReplicator{}, nil
+	}
+	markerWritten := false
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) error {
+		markerWritten = true
+		return nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	assert.False(t, markerWritten)
+}
+
+func TestFilterInternalArtifactReplicationObjectsSkipsCompletionMarker(t *testing.T) {
+	configName := "models/config.json"
+	weightName := "models/model.safetensors"
+	markerName := "models/" + constants.ArtifactCompleteMarkerFileName
+	rootMarkerName := constants.ArtifactCompleteMarkerFileName
+	size := int64(1)
+
+	objects := []common.ReplicationObject{
+		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &configName, Size: &size}},
+		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &markerName, Size: &size}},
+		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &weightName, Size: &size}},
+		common.ObjectSummaryReplicationObject{ObjectSummary: objectstorage.ObjectSummary{Name: &rootMarkerName, Size: &size}},
+	}
+
+	filtered := filterInternalArtifactReplicationObjects(objects)
+
+	require.Len(t, filtered, 2)
+	assert.Equal(t, configName, filtered[0].GetName())
+	assert.Equal(t, weightName, filtered[1].GetName())
+}
+
+func newTestAgentForCompletionMarker(t *testing.T) (*ReplicaAgent, func()) {
+	t.Helper()
+
+	oldNewReplicatorFunc := newReplicatorFunc
+	oldUploadCompletionMarkerFunc := uploadCompletionMarkerFunc
+	cleanup := func() {
+		newReplicatorFunc = oldNewReplicatorFunc
+		uploadCompletionMarkerFunc = oldUploadCompletionMarkerFunc
+	}
+
+	localPath := t.TempDir()
+	sourceDir := filepath.Join(localPath, "source-model")
+	require.NoError(t, os.MkdirAll(sourceDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "config.json"), []byte("model config"), 0644))
+
+	mockLogger := testingPkg.SetupMockLogger()
+	return &ReplicaAgent{
+		Logger: mockLogger,
+		Config: Config{
+			AnotherLogger:        mockLogger,
+			LocalPath:            localPath,
+			NumConnections:       1,
+			DownloadSizeLimitGB:  100,
+			EnableSizeLimitCheck: true,
+			Source: SourceStruct{
+				StorageURIStr: "pvc://source-pvc/source-model",
+				PVCFileSystem: afero.NewOsFs().(*afero.OsFs),
+			},
+			Target: TargetStruct{
+				StorageURIStr:  "oci://n/tgt-ns/b/tgt-bucket/o/target-models",
+				OCIOSDataStore: createMockOCIOSDataStore(),
+			},
+		},
+		ReplicationInput: common.ReplicationInput{
+			SourceStorageType: storage.StorageTypePVC,
+			TargetStorageType: storage.StorageTypeOCI,
+			Source: ociobjectstore.ObjectURI{
+				BucketName: "source-pvc",
+				Prefix:     "source-model",
+			},
+			Target: ociobjectstore.ObjectURI{
+				Namespace:  "tgt-ns",
+				BucketName: "tgt-bucket",
+				Prefix:     "target-models/",
+				Region:     "us-ashburn-1",
+			},
+		},
+	}, cleanup
 }

@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap/zaptest"
 
+	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -625,6 +626,27 @@ func TestIsReservingModelArtifact_NilTaskReturnsFalse(t *testing.T) {
 
 	s := &Gopher{logger: sugaredLogger}
 	assert.False(t, s.isReservingModelArtifact(nil), "nil task should not reserve artifact")
+}
+
+func TestFilterInternalArtifactObjectSummariesSkipsCompletionMarker(t *testing.T) {
+	configName := "models/config.json"
+	weightName := "models/model.safetensors"
+	markerName := "models/" + constants.ArtifactCompleteMarkerFileName
+	rootMarkerName := constants.ArtifactCompleteMarkerFileName
+	size := int64(1)
+
+	objects := []objectstorage.ObjectSummary{
+		{Name: &configName, Size: &size},
+		{Name: &markerName, Size: &size},
+		{Name: &weightName, Size: &size},
+		{Name: &rootMarkerName, Size: &size},
+	}
+
+	filtered := filterInternalArtifactObjectSummaries(objects)
+
+	require.Len(t, filtered, 2)
+	assert.Equal(t, configName, *filtered[0].Name)
+	assert.Equal(t, weightName, *filtered[1].Name)
 }
 
 func makeConfigMap(nodeName string, data map[string]string) *corev1.ConfigMap {

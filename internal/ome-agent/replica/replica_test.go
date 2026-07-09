@@ -738,6 +738,60 @@ func TestReplicaAgent_StartSkipsReplicationWhenTargetArtifactUploadLockCompletes
 	assert.Equal(t, 2, stateCalls)
 }
 
+func TestReplicaAgent_StartLogsTargetArtifactSizeWhenSkippingCompletedTargetArtifact(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+
+	replicatorCalled := false
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		replicatorCalled = true
+		return &fakeReplicator{}, nil
+	}
+	artifactSizeBytes := int64(123456789)
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		return targetArtifactState{
+			Complete:          true,
+			ArtifactSizeBytes: &artifactSizeBytes,
+		}, nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	assert.False(t, replicatorCalled)
+	mockLogger := agent.Logger.(*testingPkg.MockLogger)
+	mockLogger.AssertCalled(t, "Infof", "Total model size: %d bytes", []interface{}{artifactSizeBytes})
+}
+
+func TestReplicaAgent_StartUploadsCompletedTargetArtifactWhenReuseNotAllowed(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+	agent.Config.TargetArtifactReuseAllowed = false
+
+	fake := &fakeReplicator{}
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return fake, nil
+	}
+	stateCalls := 0
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		stateCalls++
+		return targetArtifactState{Complete: true}, nil
+	}
+	lockCalled := false
+	tryAcquireArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) (bool, error) {
+		lockCalled = true
+		return true, nil
+	}
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) error {
+		return nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	require.Len(t, fake.objects, 1)
+	assert.Equal(t, 1, stateCalls)
+	assert.True(t, lockCalled)
+}
+
 func TestReplicaAgent_StartReleasesTargetArtifactUploadLockWhenReplicationFails(t *testing.T) {
 	agent, cleanup := newTestAgentForCompletionMarker(t)
 	defer cleanup()
@@ -850,11 +904,12 @@ func newTestAgentForCompletionMarker(t *testing.T) (*ReplicaAgent, func()) {
 	return &ReplicaAgent{
 		Logger: mockLogger,
 		Config: Config{
-			AnotherLogger:        mockLogger,
-			LocalPath:            localPath,
-			NumConnections:       1,
-			DownloadSizeLimitGB:  100,
-			EnableSizeLimitCheck: true,
+			AnotherLogger:              mockLogger,
+			LocalPath:                  localPath,
+			NumConnections:             1,
+			DownloadSizeLimitGB:        100,
+			EnableSizeLimitCheck:       true,
+			TargetArtifactReuseAllowed: true,
 			Source: SourceStruct{
 				StorageURIStr: "pvc://source-pvc/source-model",
 				PVCFileSystem: afero.NewOsFs().(*afero.OsFs),

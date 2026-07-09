@@ -90,12 +90,13 @@ var (
 	AgentBaseModelTypeEnvVarKey       = AgentAppName + "_" + "MODEL_TYPE"
 
 	// General Configuration
-	AgentLocalPathEnvVarKey              = AgentAppName + "_" + "LOCAL_PATH"
-	AgentNumOfGPUEnvVarKey               = AgentAppName + "_" + "NUM_OF_GPU"
-	AgentDisableModelDecryptionEnvVarKey = AgentAppName + "_" + "DISABLE_MODEL_DECRYPTION"
-	AgentModelBucketNameEnvVarKey        = AgentAppName + "_" + "MODEL_BUCKET_NAME"
-	AgentModelNamespaceEnvVarKey         = AgentAppName + "_" + "MODEL_NAMESPACE"
-	AgentModelObjectName                 = AgentAppName + "_" + "MODEL_OBJECT_NAME"
+	AgentLocalPathEnvVarKey                  = AgentAppName + "_" + "LOCAL_PATH"
+	AgentNumOfGPUEnvVarKey                   = AgentAppName + "_" + "NUM_OF_GPU"
+	AgentDisableModelDecryptionEnvVarKey     = AgentAppName + "_" + "DISABLE_MODEL_DECRYPTION"
+	AgentModelBucketNameEnvVarKey            = AgentAppName + "_" + "MODEL_BUCKET_NAME"
+	AgentModelNamespaceEnvVarKey             = AgentAppName + "_" + "MODEL_NAMESPACE"
+	AgentModelObjectName                     = AgentAppName + "_" + "MODEL_OBJECT_NAME"
+	AgentTargetArtifactReuseAllowedEnvVarKey = AgentAppName + "_" + "TARGET_ARTIFACT_REUSE_ALLOWED"
 
 	// OCI Vault and Security
 	AgentCompartmentIDEnvVarKey = AgentAppName + "_" + "COMPARTMENT_ID"

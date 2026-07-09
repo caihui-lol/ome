@@ -48,8 +48,9 @@ type ReplicaAgent struct {
 }
 
 type targetArtifactState struct {
-	Complete     bool
-	UploadLocked bool
+	Complete          bool
+	UploadLocked      bool
+	ArtifactSizeBytes *int64
 }
 
 // NewReplicaAgent constructs a new replica agent from the given configuration.
@@ -163,14 +164,22 @@ func (r *ReplicaAgent) prepareTargetArtifactUpload() (bool, bool, error) {
 	if r.Config.Target.OCIOSDataStore == nil {
 		return false, false, fmt.Errorf("target OCI object store data store is nil")
 	}
+	reuseAllowed := r.Config.TargetArtifactReuseAllowed
+	if !reuseAllowed {
+		r.Logger.Infof("Target artifact reuse disabled because HF access validation marker is missing; upload lock still applies")
+	}
 
 	state, err := r.targetArtifactState()
 	if err != nil {
 		return false, false, fmt.Errorf("failed to inspect target artifact state: %w", err)
 	}
 	if state.Complete {
-		r.Logger.Infof("Target artifact is already complete; skipping replication")
-		return false, true, nil
+		if reuseAllowed {
+			r.Logger.Infof("Target artifact is already complete; skipping replication")
+			r.logTargetArtifactSize(state)
+			return false, true, nil
+		}
+		r.Logger.Infof("Target artifact is already complete but reuse is disabled; continuing with upload")
 	}
 
 	for {
@@ -188,10 +197,22 @@ func (r *ReplicaAgent) prepareTargetArtifactUpload() (bool, bool, error) {
 			return false, false, err
 		}
 		if state.Complete {
-			r.Logger.Infof("Target artifact completed while waiting for upload lock; skipping replication")
-			return false, true, nil
+			if reuseAllowed {
+				r.Logger.Infof("Target artifact completed while waiting for upload lock; skipping replication")
+				r.logTargetArtifactSize(state)
+				return false, true, nil
+			}
+			r.Logger.Infof("Target artifact completed while waiting for upload lock but reuse is disabled; continuing with upload")
 		}
 	}
+}
+
+func (r *ReplicaAgent) logTargetArtifactSize(state targetArtifactState) {
+	if state.ArtifactSizeBytes == nil {
+		r.Logger.Infof("Target artifact is complete but artifact size is unavailable")
+		return
+	}
+	r.Logger.Infof("Total model size: %d bytes", *state.ArtifactSizeBytes)
 }
 
 func (r *ReplicaAgent) acquireTargetArtifactUploadLock() (bool, error) {
@@ -248,6 +269,7 @@ func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target
 	var hasCompleteMarker bool
 	var hasArtifactObject bool
 	var hasUploadLock bool
+	var artifactSizeBytes int64
 	for _, object := range objects {
 		if object.Name == nil {
 			continue
@@ -260,14 +282,21 @@ func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target
 		default:
 			if !constants.IsInternalArtifactObjectName(*object.Name) {
 				hasArtifactObject = true
+				if object.Size != nil {
+					artifactSizeBytes += *object.Size
+				}
 			}
 		}
 	}
 
-	return targetArtifactState{
+	state := targetArtifactState{
 		Complete:     hasCompleteMarker && hasArtifactObject,
 		UploadLocked: hasUploadLock,
-	}, nil
+	}
+	if artifactSizeBytes > 0 {
+		state.ArtifactSizeBytes = &artifactSizeBytes
+	}
+	return state, nil
 }
 
 func (r *ReplicaAgent) writeCompletionMarker() error {

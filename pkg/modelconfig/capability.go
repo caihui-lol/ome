@@ -21,6 +21,7 @@ const (
 	CapabilityTextToAudio      Capability = "TEXT_TO_AUDIO"
 	CapabilityImageTextToAudio Capability = "IMAGE_TEXT_TO_AUDIO"
 	CapabilityVideoTextToAudio Capability = "VIDEO_TEXT_TO_AUDIO"
+	CapabilityVideoTextToText  Capability = "VIDEO_TEXT_TO_TEXT"
 	CapabilityAudioToText      Capability = "AUDIO_TO_TEXT"
 	CapabilityAudioToAudio     Capability = "AUDIO_TO_AUDIO"
 	CapabilityEmbedding        Capability = "EMBEDDING"
@@ -168,6 +169,7 @@ func nemotronHNanoRule(hf HuggingFaceModel) []Capability {
 		CapabilityImageTextToText,
 		CapabilityTextToText,
 		CapabilityAudioToText,
+		CapabilityVideoTextToText,
 	}
 }
 

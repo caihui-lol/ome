@@ -199,6 +199,7 @@ func TestClassifyCapabilities_NemotronH_Nano(t *testing.T) {
 		CapabilityImageTextToText,
 		CapabilityTextToText,
 		CapabilityAudioToText,
+		CapabilityVideoTextToText,
 	}
 	if got := classifyCapabilities(m); !equalCaps(got, want) {
 		t.Errorf("got %v, want %v", got, want)
@@ -414,6 +415,7 @@ func TestClassifyCapabilities_RegressionSet(t *testing.T) {
 				CapabilityImageTextToText,
 				CapabilityTextToText,
 				CapabilityAudioToText,
+				CapabilityVideoTextToText,
 			},
 		},
 		{

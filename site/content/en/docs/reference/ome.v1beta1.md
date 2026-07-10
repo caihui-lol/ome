@@ -19,7 +19,7 @@ weight: 1
 - [FineTunedWeight](#ome-io-v1beta1-FineTunedWeight)
 - [InferenceService](#ome-io-v1beta1-InferenceService)
 - [ServingRuntime](#ome-io-v1beta1-ServingRuntime)
-
+  
 
 ## `BaseModel`     {#ome-io-v1beta1-BaseModel}
 
@@ -35,8 +35,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>BaseModel</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-BaseModelSpec"><code>BaseModelSpec</code></a>
 </td>
@@ -66,8 +66,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>BenchmarkJob</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-BenchmarkJobSpec"><code>BenchmarkJobSpec</code></a>
 </td>
@@ -97,8 +97,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>ClusterBaseModel</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-BaseModelSpec"><code>BaseModelSpec</code></a>
 </td>
@@ -128,8 +128,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>ClusterServingRuntime</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-ServingRuntimeSpec"><code>ServingRuntimeSpec</code></a>
 </td>
@@ -159,8 +159,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>FineTunedWeight</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-FineTunedWeightSpec"><code>FineTunedWeightSpec</code></a>
 </td>
@@ -190,8 +190,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>InferenceService</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-InferenceServiceSpec"><code>InferenceServiceSpec</code></a>
 </td>
@@ -221,8 +221,8 @@ weight: 1
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody><tr><td><code>apiVersion</code><br/>string</td><td><code>ome.io/v1beta1</code></td></tr>
 <tr><td><code>kind</code><br/>string</td><td><code>ServingRuntime</code></td></tr>
-
-
+    
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-ServingRuntimeSpec"><code>ServingRuntimeSpec</code></a>
 </td>
@@ -250,7 +250,7 @@ weight: 1
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>memoryGB</code><br/>
 <a href="https://pkg.go.dev/k8s.io/apimachinery/pkg/api/resource#Quantity"><code>k8s.io/apimachinery/pkg/api/resource.Quantity</code></a>
 </td>
@@ -314,7 +314,7 @@ weight: 1
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>spec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-AcceleratorClassSpec"><code>AcceleratorClassSpec</code></a>
 </td>
@@ -342,7 +342,7 @@ weight: 1
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>vendor</code><br/>
 <code>string</code>
 </td>
@@ -414,7 +414,7 @@ weight: 1
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>nodes</code><br/>
 <code>[]string</code>
 </td>
@@ -474,7 +474,7 @@ weight: 1
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>minMemory</code><br/>
 <code>int64</code>
 </td>
@@ -548,7 +548,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>perHour</code><br/>
 <a href="https://pkg.go.dev/k8s.io/apimachinery/pkg/api/resource#Quantity"><code>k8s.io/apimachinery/pkg/api/resource.Quantity</code></a>
 </td>
@@ -592,7 +592,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>nodeSelector</code><br/>
 <code>map[string]string</code>
 </td>
@@ -636,7 +636,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>kueueResourceFlavor</code><br/>
 <code>string</code>
 </td>
@@ -666,7 +666,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>averageMillis</code><br/>
 <code>int64</code>
 </td>
@@ -696,7 +696,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>fp32Tflops</code><br/>
 <code>int64</code>
 </td>
@@ -749,7 +749,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>acceleratorClasses</code><br/>
 <code>[]string</code>
 </td>
@@ -809,7 +809,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -848,7 +848,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>acceleratorClass</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -912,7 +912,7 @@ Examples: [&quot;fp8&quot;, &quot;fp16&quot;, &quot;fp32&quot;]</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>acceleratorClass</code><br/>
 <code>string</code>
 </td>
@@ -954,7 +954,7 @@ Takes precedence over other selectors</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>modelFormat</code><br/>
 <a href="#ome-io-v1beta1-ModelFormat"><code>ModelFormat</code></a>
 </td>
@@ -1086,7 +1086,7 @@ state and configuration of a BenchmarkJob.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>huggingFaceSecretReference</code><br/>
 <a href="#ome-io-v1beta1-HuggingFaceSecretReference"><code>HuggingFaceSecretReference</code></a>
 </td>
@@ -1204,7 +1204,7 @@ will be set and updated by the controller.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>state</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -1259,8 +1259,6 @@ will be set and updated by the controller.</p>
 
 - [EngineSpec](#ome-io-v1beta1-EngineSpec)
 
-- [PredictorSpec](#ome-io-v1beta1-PredictorSpec)
-
 - [RouterSpec](#ome-io-v1beta1-RouterSpec)
 
 
@@ -1270,7 +1268,7 @@ will be set and updated by the controller.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>minReplicas</code><br/>
 <code>int</code>
 </td>
@@ -1385,7 +1383,7 @@ More info: http://kubernetes.io/docs/user-guide/annotations</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>latestReadyRevision</code><br/>
 <code>string</code>
 </td>
@@ -1473,7 +1471,7 @@ but is specifically used for the decode phase when separating prefill and decode
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>PodSpec</code><br/>
 <a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
 </td>
@@ -1544,7 +1542,7 @@ The fields map directly to entries in a diffusers model_index.json file.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>library</code><br/>
 <code>string</code>
 </td>
@@ -1579,7 +1577,7 @@ When set, these fields should mirror the content of the model's model_index.json
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>className</code><br/>
 <code>string</code>
 </td>
@@ -1658,7 +1656,7 @@ When set, these fields should mirror the content of the model's model_index.json
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>url</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -1701,7 +1699,7 @@ Cross-namespace references are supported for InferenceService but require approp
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>inferenceService</code><br/>
 <a href="#ome-io-v1beta1-InferenceServiceReference"><code>InferenceServiceReference</code></a>
 </td>
@@ -1739,7 +1737,7 @@ For distributed deployments, it supports leader-worker architecture configuratio
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>PodSpec</code><br/>
 <a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
 </td>
@@ -1807,7 +1805,7 @@ distributed processing tasks as directed by the leader.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>location</code><br/>
 <code>string</code>
 </td>
@@ -1881,7 +1879,7 @@ distributed processing tasks as directed by the leader.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>baseModelRef</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-ObjectReference"><code>ObjectReference</code></a>
 </td>
@@ -1950,7 +1948,7 @@ Cross-namespace references are not allowed for security and simplicity.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -1976,7 +1974,7 @@ The secret must reside in the same namespace as the BenchmarkJob.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2009,16 +2007,7 @@ Cross-namespace references are allowed but require appropriate RBAC permissions.
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
-<tr><td><code>predictor</code><br/>
-<a href="#ome-io-v1beta1-PredictorSpec"><code>PredictorSpec</code></a>
-</td>
-<td>
-   <p>Predictor defines the model serving spec
-It specifies how the model should be deployed and served, handling inference requests.
-Deprecated: Predictor is deprecated and will be removed in a future release. Please use Engine and Model fields instead.</p>
-</td>
-</tr>
+  
 <tr><td><code>engine</code><br/>
 <a href="#ome-io-v1beta1-EngineSpec"><code>EngineSpec</code></a>
 </td>
@@ -2099,7 +2088,7 @@ allowing the service to scale based on custom metrics or event sources.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>Status</code> <B>[Required]</B><br/>
 <a href="https://pkg.go.dev/knative.dev/pkg/apis/duck/v1#Status"><code>knative.dev/pkg/apis/duck/v1.Status</code></a>
 </td>
@@ -2108,7 +2097,6 @@ allowing the service to scale based on custom metrics or event sources.</p>
 <ul>
 <li>EngineRouteReady: engine route readiness condition; <!-- raw HTML omitted --></li>
 <li>DecoderRouteReady: decoder route readiness condition; <!-- raw HTML omitted --></li>
-<li>PredictorReady: predictor readiness condition; <!-- raw HTML omitted --></li>
 <li>RoutesReady (serverless mode only): aggregated routing condition, i.e. endpoint readiness condition; <!-- raw HTML omitted --></li>
 <li>LatestDeploymentReady (serverless mode only): aggregated configuration condition, i.e. latest deployment readiness condition; <!-- raw HTML omitted --></li>
 <li>Ready: aggregated condition; <!-- raw HTML omitted --></li>
@@ -2181,7 +2169,7 @@ It includes fields like the Prometheus server address, custom query, scaling thr
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>enableKeda</code> <B>[Required]</B><br/>
 <code>bool</code>
 </td>
@@ -2287,7 +2275,7 @@ token generation setups, handling task distribution and result aggregation.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>PodSpec</code><br/>
 <a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
 </td>
@@ -2335,19 +2323,19 @@ Provides fine-grained control over the container that executes the leader node's
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>failedCopies</code> <B>[Required]</B><br/>
 <code>int</code>
 </td>
 <td>
-   <p>How many copies of this predictor's models failed to load recently</p>
+   <p>How many copies of this model failed to load recently</p>
 </td>
 </tr>
 <tr><td><code>totalCopies</code><br/>
 <code>int</code>
 </td>
 <td>
-   <p>Total number copies of this predictor's models that are currently loaded</p>
+   <p>Total number copies of this model that are currently loaded</p>
 </td>
 </tr>
 </tbody>
@@ -2367,7 +2355,7 @@ Provides fine-grained control over the container that executes the leader node's
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>displayName</code><br/>
 <code>string</code>
 </td>
@@ -2419,7 +2407,7 @@ Provides fine-grained control over the container that executes the leader node's
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2432,7 +2420,7 @@ Provides fine-grained control over the container that executes the leader node's
 </td>
 <td>
    <p>Version of the model format.
-Used in validating that a runtime supports a predictor.
+Used in validating that a runtime supports a model.
 It Can be &quot;major&quot;, &quot;major.minor&quot; or &quot;major.minor.patch&quot;.</p>
 </td>
 </tr>
@@ -2468,7 +2456,7 @@ This is used to select the serving runtime based on the modelFormat version</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2481,7 +2469,7 @@ This is used to select the serving runtime based on the modelFormat version</p>
 </td>
 <td>
    <p>Version of the library.
-Used in validating that a runtime supports a predictor.
+Used in validating that a runtime supports a model.
 It Can be &quot;major&quot;, &quot;major.minor&quot; or &quot;major.minor.patch&quot;.</p>
 </td>
 </tr>
@@ -2529,7 +2517,7 @@ This is used to select the serving runtime based on the modelFramework version</
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2579,7 +2567,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>activeModelState</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-ModelState"><code>ModelState</code></a>
 </td>
@@ -2610,7 +2598,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>min</code><br/>
 <code>string</code>
 </td>
@@ -2624,47 +2612,6 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <td>
    <p>Maximum size of the model in bytes</p>
 </td>
-</tr>
-</tbody>
-</table>
-
-## `ModelSpec`     {#ome-io-v1beta1-ModelSpec}
-
-
-**Appears in:**
-
-- [PredictorSpec](#ome-io-v1beta1-PredictorSpec)
-
-
-
-<table class="table">
-<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
-<tbody>
-
-<tr><td><code>runtime</code><br/>
-<code>string</code>
-</td>
-<td>
-   <p>Specific ClusterServingRuntime/ServingRuntime name to use for deployment.</p>
-</td>
-</tr>
-<tr><td><code>PredictorExtensionSpec</code> <B>[Required]</B><br/>
-<a href="#ome-io-v1beta1-PredictorExtensionSpec"><code>PredictorExtensionSpec</code></a>
-</td>
-<td>(Members of <code>PredictorExtensionSpec</code> are embedded into this type.)
-   <span class="text-muted">No description provided.</span></td>
-</tr>
-<tr><td><code>baseModel</code> <B>[Required]</B><br/>
-<code>string</code>
-</td>
-<td>
-   <span class="text-muted">No description provided.</span></td>
-</tr>
-<tr><td><code>fineTunedWeights</code> <B>[Required]</B><br/>
-<code>[]string</code>
-</td>
-<td>
-   <span class="text-muted">No description provided.</span></td>
 </tr>
 </tbody>
 </table>
@@ -2695,19 +2642,19 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>transitionStatus</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-TransitionStatus"><code>TransitionStatus</code></a>
 </td>
 <td>
-   <p>Whether the available predictor endpoints reflect the current Spec or is in transition</p>
+   <p>Whether the available model server endpoints reflect the current Spec or is in transition</p>
 </td>
 </tr>
 <tr><td><code>modelRevisionStates</code><br/>
 <a href="#ome-io-v1beta1-ModelRevisionStates"><code>ModelRevisionStates</code></a>
 </td>
 <td>
-   <p>State information of the predictor's model.</p>
+   <p>State information of the model.</p>
 </td>
 </tr>
 <tr><td><code>lastFailureInfo</code><br/>
@@ -2721,7 +2668,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <a href="#ome-io-v1beta1-ModelCopies"><code>ModelCopies</code></a>
 </td>
 <td>
-   <p>Model copy information of the predictor's model.</p>
+   <p>Model copy information of the model.</p>
 </td>
 </tr>
 </tbody>
@@ -2745,7 +2692,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>lifecycle</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2760,6 +2707,26 @@ References to fine-tuned weights that should be applied to the base model.</p>
    <p>Status of the model weight</p>
 </td>
 </tr>
+<tr><td><code>observedGeneration</code><br/>
+<code>int64</code>
+</td>
+<td>
+   <p>ObservedGeneration is the .metadata.generation the controller last
+reconciled against. If this lags behind .metadata.generation, the
+controller has not yet observed the latest spec edit.</p>
+</td>
+</tr>
+<tr><td><code>lastReconcileTime</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#time-v1-meta"><code>k8s.io/apimachinery/pkg/apis/meta/v1.Time</code></a>
+</td>
+<td>
+   <p>LastReconcileTime is the wall-clock timestamp of the controller's most
+recent reconcile pass for this object. Liveness signal — if it falls
+behind by more than the reconcile period, the controller is wedged or
+not scheduled. Distinct from Condition.lastTransitionTime, which only
+advances on actual status flips.</p>
+</td>
+</tr>
 <tr><td><code>nodesReady</code> <B>[Required]</B><br/>
 <code>[]string</code>
 </td>
@@ -2771,6 +2738,15 @@ References to fine-tuned weights that should be applied to the base model.</p>
 </td>
 <td>
    <span class="text-muted">No description provided.</span></td>
+</tr>
+<tr><td><code>conditions</code><br/>
+<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#condition-v1-meta"><code>[]k8s.io/apimachinery/pkg/apis/meta/v1.Condition</code></a>
+</td>
+<td>
+   <p>Conditions describe model readiness and source/metadata state. The PVC
+path reports SourceReachable and Ready; PerNode models continue to
+report node-level state through NodesReady and NodesFailed.</p>
+</td>
 </tr>
 </tbody>
 </table>
@@ -2789,7 +2765,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -2819,7 +2795,7 @@ References to fine-tuned weights that should be applied to the base model.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>image</code><br/>
 <code>string</code>
 </td>
@@ -2902,8 +2878,6 @@ More info: https://kubernetes.io/docs/concepts/storage/volumes</p>
 
 - [LeaderSpec](#ome-io-v1beta1-LeaderSpec)
 
-- [PredictorSpec](#ome-io-v1beta1-PredictorSpec)
-
 - [RouterSpec](#ome-io-v1beta1-RouterSpec)
 
 - [WorkerSpec](#ome-io-v1beta1-WorkerSpec)
@@ -2915,7 +2889,7 @@ More info: https://kubernetes.io/docs/concepts/storage/volumes</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>volumes</code><br/>
 <a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#volume-v1-core"><code>[]k8s.io/api/core/v1.Volume</code></a>
 </td>
@@ -3332,106 +3306,6 @@ DynamicResourceAllocation feature gate.</p>
 </tbody>
 </table>
 
-## `PredictorExtensionSpec`     {#ome-io-v1beta1-PredictorExtensionSpec}
-
-
-**Appears in:**
-
-- [ModelSpec](#ome-io-v1beta1-ModelSpec)
-
-
-<p>PredictorExtensionSpec defines configuration shared across all predictor frameworks</p>
-
-
-<table class="table">
-<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
-<tbody>
-
-<tr><td><code>storageUri</code><br/>
-<code>string</code>
-</td>
-<td>
-   <p>This field points to the location of the model which is mounted onto the pod.</p>
-</td>
-</tr>
-<tr><td><code>runtimeVersion</code><br/>
-<code>string</code>
-</td>
-<td>
-   <p>Runtime version of the predictor docker image</p>
-</td>
-</tr>
-<tr><td><code>protocolVersion</code><br/>
-<a href="https://pkg.go.dev/sigs.k8s.io/ome/pkg/constants#InferenceServiceProtocol"><code>sigs.k8s.io/ome/pkg/constants.InferenceServiceProtocol</code></a>
-</td>
-<td>
-   <p>Protocol version to use by the predictor (i.e. v1 or v2 or grpc-v1 or grpc-v2)</p>
-</td>
-</tr>
-<tr><td><code>Container</code><br/>
-<a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#container-v1-core"><code>k8s.io/api/core/v1.Container</code></a>
-</td>
-<td>(Members of <code>Container</code> are embedded into this type.)
-   <p>Container enables overrides for the predictor.
-Each framework will have different defaults that are populated in the underlying container spec.</p>
-</td>
-</tr>
-</tbody>
-</table>
-
-## `PredictorSpec`     {#ome-io-v1beta1-PredictorSpec}
-
-
-**Appears in:**
-
-- [InferenceServiceSpec](#ome-io-v1beta1-InferenceServiceSpec)
-
-
-<p>PredictorSpec defines the configuration for a predictor,
-The following fields follow a &quot;1-of&quot; semantic. Users must specify exactly one spec.</p>
-
-
-<table class="table">
-<thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
-<tbody>
-
-<tr><td><code>model</code> <B>[Required]</B><br/>
-<a href="#ome-io-v1beta1-ModelSpec"><code>ModelSpec</code></a>
-</td>
-<td>
-   <p>Model spec for any arbitrary framework.</p>
-</td>
-</tr>
-<tr><td><code>PodSpec</code> <B>[Required]</B><br/>
-<a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
-</td>
-<td>(Members of <code>PodSpec</code> are embedded into this type.)
-   <p>This spec is dual purpose. <!-- raw HTML omitted --></p>
-<ol>
-<li>Provide a full PodSpec for custom predictor.
-The field PodSpec.Containers is mutually exclusive with other predictors (i.e. TFServing). <!-- raw HTML omitted --></li>
-<li>Provide a predictor (i.e. TFServing) and specify PodSpec
-overrides, you must not provide PodSpec.Containers in this case. <!-- raw HTML omitted --></li>
-</ol>
-</td>
-</tr>
-<tr><td><code>ComponentExtensionSpec</code> <B>[Required]</B><br/>
-<a href="#ome-io-v1beta1-ComponentExtensionSpec"><code>ComponentExtensionSpec</code></a>
-</td>
-<td>(Members of <code>ComponentExtensionSpec</code> are embedded into this type.)
-   <p>Component extension defines the deployment configurations for a predictor</p>
-</td>
-</tr>
-<tr><td><code>workerSpec</code><br/>
-<a href="#ome-io-v1beta1-WorkerSpec"><code>WorkerSpec</code></a>
-</td>
-<td>
-   <p>WorkerSpec for the predictor, this is used for multi-node serving without Ray Cluster</p>
-</td>
-</tr>
-</tbody>
-</table>
-
 ## `RouterSpec`     {#ome-io-v1beta1-RouterSpec}
 
 
@@ -3448,7 +3322,7 @@ overrides, you must not provide PodSpec.Containers in this case. <!-- raw HTML o
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>PodSpec</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
 </td>
@@ -3504,7 +3378,7 @@ The Runner is the primary container that executes the model serving or token gen
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>Container</code><br/>
 <a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#container-v1-core"><code>k8s.io/api/core/v1.Container</code></a>
 </td>
@@ -3559,7 +3433,7 @@ that contains the credentials for authenticating with the scaler's target (e.g.,
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -3593,7 +3467,7 @@ This information helps track experiment context, enabling users to filter and qu
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>engine</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -3641,7 +3515,7 @@ Supported values: &quot;H100&quot;, &quot;A100&quot;, &quot;MI300&quot;, &quot;A
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>containers</code><br/>
 <a href="https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.31/#container-v1-core"><code>[]k8s.io/api/core/v1.Container</code></a>
 </td>
@@ -3759,7 +3633,7 @@ Default to false.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code> <B>[Required]</B><br/>
 <code>string</code>
 </td>
@@ -3827,7 +3701,7 @@ are hammered out.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>supportedModelFormats</code> <B>[Required]</B><br/>
 <a href="#ome-io-v1beta1-SupportedModelFormat"><code>[]SupportedModelFormat</code></a>
 </td>
@@ -3932,7 +3806,7 @@ are hammered out.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>path</code><br/>
 <code>string</code>
 </td>
@@ -4021,7 +3895,7 @@ Supported policies:</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>name</code><br/>
 <code>string</code>
 </td>
@@ -4049,7 +3923,7 @@ Name of the model</p>
 </td>
 <td>
    <p>Version of the model format.
-Used in validating that a runtime supports a predictor.
+Used in validating that a runtime supports a model.
 It Can be &quot;major&quot;, &quot;major.minor&quot; or &quot;major.minor.patch&quot;.</p>
 </td>
 </tr>
@@ -4123,7 +3997,7 @@ Priority can be overridden by specifying the runtime in the InferenceService.</p
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>tensorParallelSize</code><br/>
 <code>int64</code>
 </td>
@@ -4174,7 +4048,7 @@ Priority can be overridden by specifying the runtime in the InferenceService.</p
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>size</code><br/>
 <code>int</code>
 </td>
@@ -4201,8 +4075,6 @@ Priority can be overridden by specifying the runtime in the InferenceService.</p
 
 - [EngineSpec](#ome-io-v1beta1-EngineSpec)
 
-- [PredictorSpec](#ome-io-v1beta1-PredictorSpec)
-
 
 <p>WorkerSpec defines the configuration for worker nodes in a multi-node component
 Worker nodes perform the distributed processing tasks assigned by the leader node,
@@ -4212,7 +4084,7 @@ enabling horizontal scaling for compute-intensive workloads.</p>
 <table class="table">
 <thead><tr><th width="30%">Field</th><th>Description</th></tr></thead>
 <tbody>
-
+  
 <tr><td><code>PodSpec</code><br/>
 <a href="#ome-io-v1beta1-PodSpec"><code>PodSpec</code></a>
 </td>
@@ -4240,3 +4112,4 @@ Provides fine-grained control over the container that executes the worker node's
 </tr>
 </tbody>
 </table>
+  

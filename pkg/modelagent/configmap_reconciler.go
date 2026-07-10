@@ -1475,6 +1475,85 @@ func (c *ConfigMapReconciler) upsertHuggingFaceArtifactParentEntry(ctx context.C
 	return c.updateConfigMapWithRetry(ctx, updateConfigMap)
 }
 
+// setHuggingFaceArtifactParentStatus updates the synthetic Hugging Face parent
+// status while preserving its origin, parent path, and childrenPaths metadata.
+func (c *ConfigMapReconciler) setHuggingFaceArtifactParentStatus(ctx context.Context, parentName string, identity ArtifactIdentity, parentPath string, status ModelStatus, skipIfUpdating bool) (string, bool, error) {
+	observedParentPath := parentPath
+	updated := false
+	updateConfigMap := func(currentConfigMap *corev1.ConfigMap) (bool, *corev1.ConfigMap, error) {
+		if currentConfigMap.Data == nil {
+			currentConfigMap.Data = make(map[string]string)
+		}
+
+		modelEntry := ModelEntry{
+			Name:   parentName,
+			Status: status,
+			Config: &ModelConfig{
+				Artifact: Artifact{
+					Sha:           strings.ToLower(identity.HFCommitSHA),
+					Origin:        identity.toOrigin(),
+					ParentPath:    map[string]string{parentName: parentPath},
+					ChildrenPaths: []string{},
+				},
+			},
+		}
+		if existingDataEntry, exists := currentConfigMap.Data[parentName]; exists {
+			var existing ModelEntry
+			if err := json.Unmarshal([]byte(existingDataEntry), &existing); err != nil {
+				return false, currentConfigMap, fmt.Errorf("failed to parse existing Hugging Face artifact parent entry %s: %w", parentName, err)
+			}
+			if existing.Config == nil || existing.Config.Artifact.Origin == nil {
+				return false, currentConfigMap, fmt.Errorf("existing Hugging Face artifact parent entry %s is missing origin metadata", parentName)
+			}
+			origin := existing.Config.Artifact.Origin
+			if !strings.EqualFold(origin.Type, identity.OriginType) || origin.HFModelID != identity.HFModelID || !strings.EqualFold(origin.HFCommitSHA, identity.HFCommitSHA) {
+				return false, currentConfigMap, fmt.Errorf("existing Hugging Face artifact parent entry %s has mismatched origin metadata", parentName)
+			}
+			if existingParentPath := existing.Config.Artifact.ParentPath[parentName]; strings.TrimSpace(existingParentPath) != "" {
+				observedParentPath = existingParentPath
+			}
+			if skipIfUpdating && existing.Status == ModelStatusUpdating {
+				updated = false
+				return false, currentConfigMap, nil
+			}
+			modelEntry = existing
+			modelEntry.Name = parentName
+			modelEntry.Status = status
+			modelEntry.Config.Artifact.Sha = strings.ToLower(identity.HFCommitSHA)
+			modelEntry.Config.Artifact.Origin = identity.toOrigin()
+			modelEntry.Config.Artifact.ParentPath = map[string]string{parentName: observedParentPath}
+			if modelEntry.Config.Artifact.ChildrenPaths == nil {
+				modelEntry.Config.Artifact.ChildrenPaths = []string{}
+			}
+		}
+
+		entryJSON, err := json.Marshal(modelEntry)
+		if err != nil {
+			return false, currentConfigMap, err
+		}
+		currentConfigMap.Data[parentName] = string(entryJSON)
+		updated = true
+		return true, currentConfigMap, nil
+	}
+
+	err := c.updateConfigMapWithRetry(ctx, updateConfigMap)
+	return observedParentPath, updated, err
+}
+
+// markHuggingFaceArtifactParentUpdating marks the synthetic Hugging Face parent
+// as Updating before a DownloadOverride repair writes to the shared parent path.
+// Existing childrenPaths are preserved so ready child entries keep pointing to
+// the same parent metadata while the repair runs. If another worker already
+// owns the Updating parent, acquired is false and the caller should wait.
+func (c *ConfigMapReconciler) markHuggingFaceArtifactParentUpdating(ctx context.Context, parentName string, identity ArtifactIdentity, parentPath string) (string, bool, error) {
+	return c.setHuggingFaceArtifactParentStatus(ctx, parentName, identity, parentPath, ModelStatusUpdating, true)
+}
+
+func (c *ConfigMapReconciler) markHuggingFaceArtifactParentFailed(ctx context.Context, parentName string, identity ArtifactIdentity, parentPath string) error {
+	_, _, err := c.setHuggingFaceArtifactParentStatus(ctx, parentName, identity, parentPath, ModelStatusFailed, false)
+	return err
+}
+
 // reserveHuggingFaceArtifactParentEntry creates the synthetic parent in Updating
 // state before the first worker downloads to the canonical path. Other workers
 // see the reservation and wait instead of writing to the same directory.

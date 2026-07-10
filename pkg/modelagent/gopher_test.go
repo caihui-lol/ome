@@ -23,8 +23,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	k8sfake "k8s.io/client-go/kubernetes/fake"
+	ktesting "k8s.io/client-go/testing"
 
 	"github.com/sgl-project/ome/pkg/apis/ome/v1beta1"
 	omefake "github.com/sgl-project/ome/pkg/client/clientset/versioned/fake"
@@ -902,6 +904,22 @@ func TestShouldUseHuggingFaceOriginObjectStorageReuse(t *testing.T) {
 	assert.False(t, shouldUseHuggingFaceOriginObjectStorageReuse(&GopherTask{TaskType: Download}, v1beta1.BaseModelSpec{}))
 }
 
+func TestShouldRepairHuggingFaceOriginObjectStorageParent(t *testing.T) {
+	policy := v1beta1.ReuseIfExists
+	alwaysDownload := v1beta1.AlwaysDownload
+
+	assert.True(t, shouldRepairHuggingFaceOriginObjectStorageParent(&GopherTask{TaskType: DownloadOverride}, v1beta1.BaseModelSpec{
+		Storage: &v1beta1.StorageSpec{DownloadPolicy: &policy},
+	}))
+	assert.False(t, shouldRepairHuggingFaceOriginObjectStorageParent(&GopherTask{TaskType: Download}, v1beta1.BaseModelSpec{
+		Storage: &v1beta1.StorageSpec{DownloadPolicy: &policy},
+	}))
+	assert.False(t, shouldRepairHuggingFaceOriginObjectStorageParent(&GopherTask{TaskType: DownloadOverride}, v1beta1.BaseModelSpec{
+		Storage: &v1beta1.StorageSpec{DownloadPolicy: &alwaysDownload},
+	}))
+	assert.False(t, shouldRepairHuggingFaceOriginObjectStorageParent(&GopherTask{TaskType: DownloadOverride}, v1beta1.BaseModelSpec{}))
+}
+
 func TestFindReadyHuggingFaceOriginArtifactMatchesModelIDAndSHA(t *testing.T) {
 	modelID := "Qwen/Qwen3-4B-Instruct-2507"
 	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
@@ -1087,6 +1105,266 @@ func TestReserveHuggingFaceArtifactParentEntryCreatesUpdatingParent(t *testing.T
 	assert.Equal(t, parentKey, gotKey)
 	assert.Equal(t, parentPath, gotParentPath)
 	assert.Equal(t, ModelStatusUpdating, parentStatus)
+}
+
+func TestMarkHuggingFaceArtifactParentUpdatingPreservesChildren(t *testing.T) {
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	tmpDir := t.TempDir()
+	parentPath := canonicalHuggingFaceArtifactPath(filepath.Join(tmpDir, "child"), identity)
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	childPath := filepath.Join(tmpDir, "models", "child")
+	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{
+		parentKey: entryJSONWithOrigin(ModelStatusReady, modelID, sha, parentKey, parentPath, []string{childPath}),
+	}))
+
+	gotPath, acquired, err := g.configMapReconciler.markHuggingFaceArtifactParentUpdating(context.Background(), parentKey, identity, parentPath)
+
+	require.NoError(t, err)
+	assert.True(t, acquired)
+	assert.Equal(t, parentPath, gotPath)
+
+	gotKey, gotParentPath, parentStatus, ok := g.getHuggingFaceArtifactParent(context.Background(), identity)
+	require.True(t, ok)
+	assert.Equal(t, parentKey, gotKey)
+	assert.Equal(t, parentPath, gotParentPath)
+	assert.Equal(t, ModelStatusUpdating, parentStatus)
+
+	exists, dataEntry, err := g.configMapReconciler.getDataEntryBasedOnModelKey(context.Background(), parentKey)
+	require.NoError(t, err)
+	require.True(t, exists)
+	_, childrenPaths, err := g.configMapReconciler.getParentPathAndChildrenPaths(parentKey, dataEntry)
+	require.NoError(t, err)
+	assert.Contains(t, childrenPaths, childPath)
+}
+
+func TestMarkHuggingFaceArtifactParentUpdatingDoesNotAcquireUpdatingParent(t *testing.T) {
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	tmpDir := t.TempDir()
+	parentPath := canonicalHuggingFaceArtifactPath(filepath.Join(tmpDir, "child"), identity)
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	childPath := filepath.Join(tmpDir, "models", "child")
+	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{
+		parentKey: entryJSONWithOrigin(ModelStatusUpdating, modelID, sha, parentKey, parentPath, []string{childPath}),
+	}))
+
+	gotPath, acquired, err := g.configMapReconciler.markHuggingFaceArtifactParentUpdating(context.Background(), parentKey, identity, parentPath)
+
+	require.NoError(t, err)
+	assert.False(t, acquired)
+	assert.Equal(t, parentPath, gotPath)
+
+	_, gotParentPath, parentStatus, ok := g.getHuggingFaceArtifactParent(context.Background(), identity)
+	require.True(t, ok)
+	assert.Equal(t, parentPath, gotParentPath)
+	assert.Equal(t, ModelStatusUpdating, parentStatus)
+}
+
+func TestRepairHuggingFaceOriginArtifactParentDownloadsParentAndLinksChild(t *testing.T) {
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	tmpDir := t.TempDir()
+	childPath := filepath.Join(tmpDir, "models", "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	siblingPath := filepath.Join(tmpDir, "models", "sibling")
+	writeMinimalModelConfig(t, parentPath)
+	require.NoError(t, writeHuggingFaceArtifactReadyMarker(parentPath))
+
+	model := &v1beta1.BaseModel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child",
+			Namespace: "default",
+			Annotations: map[string]string{
+				HuggingFaceModelIDAnnotationKey: modelID,
+				HuggingFaceSHAAnnotationKey:     sha,
+			},
+		},
+		Spec: v1beta1.BaseModelSpec{
+			Storage: &v1beta1.StorageSpec{
+				StorageUri:     stringPtr("oci://n/ns/b/bucket/o/customer-imported-basemodels/qwen/qwen3/" + sha),
+				Path:           &childPath,
+				DownloadPolicy: dp(v1beta1.ReuseIfExists),
+			},
+		},
+	}
+	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{
+		parentKey: entryJSONWithOrigin(ModelStatusReady, modelID, sha, parentKey, parentPath, []string{siblingPath}),
+	}))
+	downloadCalled := false
+	downloadParent := func(downloadPath string) error {
+		downloadCalled = true
+		assert.Equal(t, parentPath, downloadPath)
+		assert.False(t, hasHuggingFaceArtifactReadyMarker(parentPath), "repair should clear stale ready marker before writing parent")
+		writeMinimalModelConfig(t, downloadPath)
+		return nil
+	}
+
+	artifact, repaired, err := g.repairHuggingFaceOriginArtifactParent(context.Background(), &GopherTask{
+		TaskType:  DownloadOverride,
+		BaseModel: model,
+	}, model.Name, childPath, parentKey, parentPath, identity, downloadParent)
+
+	require.NoError(t, err)
+	require.True(t, repaired)
+	require.True(t, downloadCalled)
+	require.NotNil(t, artifact)
+	assert.Equal(t, parentPath, artifact.ParentPath[parentKey])
+
+	resolvedChild, err := filepath.EvalSymlinks(childPath)
+	require.NoError(t, err)
+	resolvedParent, err := filepath.EvalSymlinks(parentPath)
+	require.NoError(t, err)
+	assert.Equal(t, resolvedParent, resolvedChild)
+	assert.True(t, hasHuggingFaceArtifactReadyMarker(parentPath))
+
+	_, gotParentPath, parentStatus, ok := g.getHuggingFaceArtifactParent(context.Background(), identity)
+	require.True(t, ok)
+	assert.Equal(t, parentPath, gotParentPath)
+	assert.Equal(t, ModelStatusReady, parentStatus)
+
+	exists, dataEntry, err := g.configMapReconciler.getDataEntryBasedOnModelKey(context.Background(), parentKey)
+	require.NoError(t, err)
+	require.True(t, exists)
+	_, childrenPaths, err := g.configMapReconciler.getParentPathAndChildrenPaths(parentKey, dataEntry)
+	require.NoError(t, err)
+	assert.Contains(t, childrenPaths, siblingPath)
+	assert.Contains(t, childrenPaths, childPath)
+}
+
+func TestRepairHuggingFaceOriginArtifactParentMarksParentFailedOnDownloadError(t *testing.T) {
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	tmpDir := t.TempDir()
+	childPath := filepath.Join(tmpDir, "models", "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	writeMinimalModelConfig(t, parentPath)
+
+	model := &v1beta1.BaseModel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child",
+			Namespace: "default",
+			Annotations: map[string]string{
+				HuggingFaceModelIDAnnotationKey: modelID,
+				HuggingFaceSHAAnnotationKey:     sha,
+			},
+		},
+		Spec: v1beta1.BaseModelSpec{
+			Storage: &v1beta1.StorageSpec{
+				StorageUri:     stringPtr("oci://n/ns/b/bucket/o/customer-imported-basemodels/qwen/qwen3/" + sha),
+				Path:           &childPath,
+				DownloadPolicy: dp(v1beta1.ReuseIfExists),
+			},
+		},
+	}
+	g := newGopherWithConfigMap(makeConfigMap("node-1", map[string]string{
+		parentKey: entryJSONWithOrigin(ModelStatusReady, modelID, sha, parentKey, parentPath, []string{}),
+	}))
+	downloadErr := fmt.Errorf("download failed")
+
+	artifact, repaired, err := g.repairHuggingFaceOriginArtifactParent(context.Background(), &GopherTask{
+		TaskType:  DownloadOverride,
+		BaseModel: model,
+	}, model.Name, childPath, parentKey, parentPath, identity, func(downloadPath string) error {
+		return downloadErr
+	})
+
+	assert.Nil(t, artifact)
+	assert.False(t, repaired)
+	assert.ErrorIs(t, err, downloadErr)
+
+	_, gotParentPath, parentStatus, ok := g.getHuggingFaceArtifactParent(context.Background(), identity)
+	require.True(t, ok)
+	assert.Equal(t, parentPath, gotParentPath)
+	assert.Equal(t, ModelStatusFailed, parentStatus)
+}
+
+func TestRepairHuggingFaceOriginArtifactParentKeepsReadyMarkerWhenRepairNotAcquired(t *testing.T) {
+	modelID := "Qwen/Qwen3-4B-Instruct-2507"
+	sha := "cdbee75f17c01a7cc42f958dc650907174af0554"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	tmpDir := t.TempDir()
+	childPath := filepath.Join(tmpDir, "models", "child")
+	parentPath := canonicalHuggingFaceArtifactPath(childPath, identity)
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	writeMinimalModelConfig(t, parentPath)
+	require.NoError(t, writeHuggingFaceArtifactReadyMarker(parentPath))
+
+	model := &v1beta1.BaseModel{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "child",
+			Namespace: "default",
+			Annotations: map[string]string{
+				HuggingFaceModelIDAnnotationKey: modelID,
+				HuggingFaceSHAAnnotationKey:     sha,
+			},
+		},
+		Spec: v1beta1.BaseModelSpec{
+			Storage: &v1beta1.StorageSpec{
+				StorageUri:     stringPtr("oci://n/ns/b/bucket/o/customer-imported-basemodels/qwen/qwen3/" + sha),
+				Path:           &childPath,
+				DownloadPolicy: dp(v1beta1.ReuseIfExists),
+			},
+		},
+	}
+	readyParent := makeConfigMap("node-1", map[string]string{
+		parentKey: entryJSONWithOrigin(ModelStatusReady, modelID, sha, parentKey, parentPath, []string{}),
+	})
+	updatingParent := readyParent.DeepCopy()
+	updatingParent.Data[parentKey] = entryJSONWithOrigin(ModelStatusUpdating, modelID, sha, parentKey, parentPath, []string{})
+	g := newGopherWithConfigMap(readyParent)
+	fakeClient, ok := g.configMapReconciler.kubeClient.(*k8sfake.Clientset)
+	require.True(t, ok)
+	getCount := 0
+	fakeClient.PrependReactor("get", "configmaps", func(action ktesting.Action) (bool, runtime.Object, error) {
+		getCount++
+		if getCount >= 3 {
+			return true, updatingParent.DeepCopy(), nil
+		}
+		return false, nil, nil
+	})
+	downloadCalled := false
+
+	artifact, repaired, err := g.repairHuggingFaceOriginArtifactParent(context.Background(), &GopherTask{
+		TaskType:              DownloadOverride,
+		BaseModel:             model,
+		SamePathWaitStartedAt: time.Now().Add(-defaultSamePathWaitTimeout),
+	}, model.Name, childPath, parentKey, parentPath, identity, func(downloadPath string) error {
+		downloadCalled = true
+		return nil
+	})
+
+	assert.Nil(t, artifact)
+	assert.False(t, repaired)
+	assert.ErrorContains(t, err, "timed out waiting for Hugging Face artifact parent")
+	assert.False(t, downloadCalled)
+	assert.True(t, hasHuggingFaceArtifactReadyMarker(parentPath), "non-owner repair must not remove the ready marker")
 }
 
 func TestProcessTaskRequeuesWhenHuggingFaceArtifactParentIsUpdating(t *testing.T) {

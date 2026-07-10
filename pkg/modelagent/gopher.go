@@ -439,16 +439,21 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 			var artifact *Artifact
 			hfOriginIdentity, hasHFOriginIdentity := huggingFaceArtifactIdentityFromTask(task)
 			useHuggingFaceOriginReuse := hasHFOriginIdentity && shouldUseHuggingFaceOriginObjectStorageReuse(task, baseModelSpec)
+			useHuggingFaceOriginRepair := hasHFOriginIdentity && shouldRepairHuggingFaceOriginObjectStorageParent(task, baseModelSpec)
 			hfArtifactParentKey := ""
 			hfArtifactParentPath := ""
 			if hasHFOriginIdentity {
 				s.logger.Infof("OCI model %s has Hugging Face origin metadata %s@%s for artifact reuse",
 					modelInfo, hfOriginIdentity.HFModelID, hfOriginIdentity.HFCommitSHA)
 			}
-			if useHuggingFaceOriginReuse {
+			if useHuggingFaceOriginReuse || useHuggingFaceOriginRepair {
 				hfArtifactParentKey = huggingFaceArtifactConfigMapKey(hfOriginIdentity)
 				hfArtifactParentPath = canonicalHuggingFaceArtifactPathForTask(task, s.modelRootDir, destPath, hfOriginIdentity)
-				s.logger.Infof("OCI model %s will use canonical Hugging Face artifact parent %s at %s",
+				s.logger.Infof("OCI model %s will use canonical Hugging Face artifact parent %s at %s for %s",
+					modelInfo, hfArtifactParentKey, hfArtifactParentPath, task.TaskType)
+			}
+			if useHuggingFaceOriginRepair {
+				s.logger.Infof("OCI model %s will repair canonical Hugging Face artifact parent %s at %s",
 					modelInfo, hfArtifactParentKey, hfArtifactParentPath)
 			}
 			if err != nil {
@@ -485,7 +490,16 @@ func (s *Gopher) processTaskWithOptions(task *GopherTask, allowFallbackDownload 
 				return nil
 			}
 
-			if shouldUseSamePathObjectStorageReuse(task) {
+			if useHuggingFaceOriginRepair {
+				var repaired bool
+				artifact, repaired, err = s.repairHuggingFaceOriginArtifactParent(ctx, task, name, destPath, hfArtifactParentKey, hfArtifactParentPath, hfOriginIdentity, downloadObjectStorageModel)
+				if err != nil {
+					return err
+				}
+				if !repaired {
+					return nil
+				}
+			} else if shouldUseSamePathObjectStorageReuse(task) {
 				var reused bool
 				if useHuggingFaceOriginReuse {
 					artifact, reused, err = s.reuseHuggingFaceOriginArtifactIfPossible(ctx, task, baseModelSpec, modelType, namespace, name, destPath, hfOriginIdentity)
@@ -762,6 +776,14 @@ func shouldUseHuggingFaceOriginObjectStorageReuse(task *GopherTask, baseModelSpe
 		*baseModelSpec.Storage.DownloadPolicy == v1beta1.ReuseIfExists
 }
 
+func shouldRepairHuggingFaceOriginObjectStorageParent(task *GopherTask, baseModelSpec v1beta1.BaseModelSpec) bool {
+	return task != nil &&
+		task.TaskType == DownloadOverride &&
+		baseModelSpec.Storage != nil &&
+		baseModelSpec.Storage.DownloadPolicy != nil &&
+		*baseModelSpec.Storage.DownloadPolicy == v1beta1.ReuseIfExists
+}
+
 func (i ArtifactIdentity) isValid() bool {
 	return strings.EqualFold(i.OriginType, ArtifactOriginTypeHuggingFace) &&
 		strings.TrimSpace(i.HFModelID) != "" &&
@@ -875,6 +897,14 @@ func writeHuggingFaceArtifactReadyMarker(parentPath string) error {
 		return err
 	}
 	return os.WriteFile(huggingFaceArtifactReadyMarkerPath(parentPath), []byte("ready\n"), 0644)
+}
+
+func removeHuggingFaceArtifactReadyMarker(parentPath string) error {
+	err := os.Remove(huggingFaceArtifactReadyMarkerPath(parentPath))
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func hasHuggingFaceArtifactReadyMarker(parentPath string) bool {
@@ -1158,7 +1188,8 @@ func (s *Gopher) createOCIOSDataStore(baseModelSpec v1beta1.BaseModelSpec) (*oci
 // model entry on this node that resolves to the same local destination path.
 // This is intentionally independent of downloadPolicy for normal Download tasks:
 // copied model CRs with the same source and destination can reuse Ready local
-// files. DownloadOverride keeps the existing download/validation path.
+// files. DownloadOverride is handled separately so it can validate and repair
+// the relevant artifact instead of skipping work.
 func (s *Gopher) findReadyObjectStorageModelWithSamePath(ctx context.Context, task *GopherTask, baseModelSpec v1beta1.BaseModelSpec, destPath string) (string, bool) {
 	return s.findObjectStorageModelWithSamePathAndStatus(ctx, task, baseModelSpec, destPath, ModelStatusReady, true)
 }
@@ -1255,6 +1286,59 @@ func (s *Gopher) reuseHuggingFaceOriginArtifactIfPossible(ctx context.Context, t
 	}
 
 	artifact, err := s.linkHuggingFaceOriginArtifact(ctx, task, name, destPath, matchedModelKey, parentPath, identity)
+	if err != nil {
+		return nil, false, err
+	}
+	return artifact, true, nil
+}
+
+func (s *Gopher) repairHuggingFaceOriginArtifactParent(ctx context.Context, task *GopherTask, name string, destPath string,
+	parentKey string, parentPath string, identity ArtifactIdentity, downloadObjectStorageModel func(string) error) (*Artifact, bool, error) {
+	if !identity.isValid() || strings.TrimSpace(parentKey) == "" || strings.TrimSpace(parentPath) == "" {
+		return nil, false, nil
+	}
+	if wait, waitErr := s.requeueIfHuggingFaceArtifactParentUpdating(ctx, task, identity); wait || waitErr != nil {
+		return nil, false, waitErr
+	}
+
+	repairPath := parentPath
+	if _, observedParentPath, _, ok := s.getHuggingFaceArtifactParent(ctx, identity); ok {
+		repairPath = observedParentPath
+	}
+	repairPath, acquired, err := s.configMapReconciler.markHuggingFaceArtifactParentUpdating(ctx, parentKey, identity, repairPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if !acquired {
+		if s.requeueSamePathInFlightReuseWait(task, parentKey) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("timed out waiting for Hugging Face artifact parent %s to become available for repair", parentKey)
+	}
+	if markerErr := removeHuggingFaceArtifactReadyMarker(repairPath); markerErr != nil {
+		if failErr := s.configMapReconciler.markHuggingFaceArtifactParentFailed(ctx, parentKey, identity, repairPath); failErr != nil {
+			s.logger.Warnf("failed to mark Hugging Face artifact parent %s at %s as Failed after ready marker removal error: %v", parentKey, repairPath, failErr)
+		}
+		return nil, false, fmt.Errorf("failed to remove Hugging Face artifact ready marker for parent %s at %s before repair: %w", parentKey, repairPath, markerErr)
+	}
+	s.logger.Infof("Repairing Hugging Face artifact parent %s at %s for OCI model %s using origin %s@%s",
+		parentKey, repairPath, name, identity.HFModelID, identity.HFCommitSHA)
+
+	if err := downloadObjectStorageModel(repairPath); err != nil {
+		s.logger.Errorf("failed to repair Hugging Face artifact parent %s at %s: %v", parentKey, repairPath, err)
+		if failErr := s.configMapReconciler.markHuggingFaceArtifactParentFailed(ctx, parentKey, identity, repairPath); failErr != nil {
+			s.logger.Warnf("failed to mark Hugging Face artifact parent %s at %s as Failed after repair error: %v", parentKey, repairPath, failErr)
+		}
+		return nil, false, err
+	}
+	if markerErr := writeHuggingFaceArtifactReadyMarker(repairPath); markerErr != nil {
+		s.logger.Warnf("failed to write Hugging Face artifact ready marker for repaired parent %s at %s: %v", parentKey, repairPath, markerErr)
+	}
+	if err := s.markHuggingFaceArtifactParentReady(ctx, parentKey, repairPath, identity); err != nil {
+		s.logger.Errorf("repaired Hugging Face artifact parent %s at %s but failed to mark it Ready: %v", parentKey, repairPath, err)
+		return nil, false, err
+	}
+	artifact, err := s.linkHuggingFaceOriginArtifact(ctx, task, name, destPath, parentKey, repairPath, identity)
 	if err != nil {
 		return nil, false, err
 	}

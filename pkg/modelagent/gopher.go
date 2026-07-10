@@ -1280,9 +1280,10 @@ func (s *Gopher) linkHuggingFaceOriginArtifact(ctx context.Context, task *Gopher
 	}
 	s.logger.Infof("Successfully added OCI model path %s to parent %s childrenPaths", destPath, parentKey)
 
-	currentModelKey := s.configMapReconciler.getModelConfigMapKey(task.BaseModel, task.ClusterBaseModel)
-	childrenPaths, _, _, _ := s.parseModelConfigDataEntry(ctx, currentModelKey)
-	return s.buildArtifactAttributeFromIdentity(identity, parentKey, parentPath, childrenPaths), nil
+	// A linked OCI model is a child of the canonical Hugging Face artifact entry.
+	// The child entry may only have Updating status at this point, so do not parse
+	// it for artifact children; the parent entry owns the childrenPaths list.
+	return s.buildArtifactAttributeFromIdentity(identity, parentKey, parentPath, []string{}), nil
 }
 
 func (s *Gopher) recordHuggingFaceOriginChildPath(ctx context.Context, parentKey string, parentPath string, childPath string, identity ArtifactIdentity) error {

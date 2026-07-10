@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/oracle/oci-go-sdk/v65/objectstorage"
 	"github.com/stretchr/testify/assert"
@@ -1499,6 +1501,46 @@ func TestBuildSelfParentArtifactFromIdentityPreservesExistingChildren(t *testing
 	assert.Equal(t, sha, artifact.Sha)
 	assert.Equal(t, modelPath, artifact.ParentPath[currentKey])
 	assert.Equal(t, []string{existingChildPath}, artifact.ChildrenPaths)
+}
+
+func TestLinkHuggingFaceOriginArtifactDoesNotParseIncompleteChildEntry(t *testing.T) {
+	modelID := "Qwen/Qwen3-8B"
+	sha := "b968826d9c46dd6066d109eabc6255188de91218"
+	identity := ArtifactIdentity{
+		OriginType:  ArtifactOriginTypeHuggingFace,
+		HFModelID:   modelID,
+		HFCommitSHA: sha,
+	}
+	parentKey := huggingFaceArtifactConfigMapKey(identity)
+	parentPath := filepath.Join(t.TempDir(), "_artifacts", "Qwen", "Qwen3-8B", sha)
+	childPath := filepath.Join(t.TempDir(), "model-ocid")
+	require.NoError(t, os.MkdirAll(parentPath, 0755))
+	writeMinimalModelConfig(t, parentPath)
+
+	model := &v1beta1.BaseModel{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-ocid", Namespace: "default"},
+	}
+	currentKey := constants.GetModelConfigMapKey(model.Namespace, model.Name, false)
+
+	core, observedLogs := observer.New(zapcore.InfoLevel)
+	logger := zap.New(core).Sugar()
+	cm := makeConfigMap("node-1", map[string]string{
+		parentKey:  entryJSONWithOrigin(ModelStatusReady, modelID, sha, parentKey, parentPath, []string{}),
+		currentKey: modelEntryJSON(ModelStatusUpdating),
+	})
+	client := k8sfake.NewSimpleClientset(cm)
+	g := &Gopher{
+		configMapReconciler: NewConfigMapReconciler(cm.Name, cm.Namespace, client, logger),
+		logger:              logger,
+	}
+
+	artifact, err := g.linkHuggingFaceOriginArtifact(context.Background(), &GopherTask{BaseModel: model}, model.Name, childPath, parentKey, parentPath, identity)
+
+	require.NoError(t, err)
+	require.NotNil(t, artifact)
+	assert.Equal(t, parentPath, artifact.ParentPath[parentKey])
+	assert.Empty(t, artifact.ChildrenPaths)
+	assert.Zero(t, observedLogs.FilterLevelExact(zapcore.ErrorLevel).Len())
 }
 
 func TestHasSharedArtifactMetadataUsesParentChildRelationships(t *testing.T) {

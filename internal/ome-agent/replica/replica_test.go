@@ -738,6 +738,99 @@ func TestReplicaAgent_StartSkipsReplicationWhenTargetArtifactUploadLockCompletes
 	assert.Equal(t, 2, stateCalls)
 }
 
+func TestReplicaAgent_StartSkipsCompletedTargetArtifactEvenWhenUploadLockIsStale(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+	agent.Config.ArtifactUploadLockTimeout = time.Hour
+
+	now := time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+
+	replicatorCalled := false
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		replicatorCalled = true
+		return &fakeReplicator{}, nil
+	}
+	tryAcquireArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, target ociobjectstore.ObjectURI) (bool, error) {
+		assert.Equal(t, "target-models/"+constants.ArtifactUploadLockFileName, target.ObjectName)
+		return false, nil
+	}
+
+	staleLockModifiedTime := now.Add(-2 * time.Hour)
+	stateCalls := 0
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		stateCalls++
+		if stateCalls == 1 {
+			return targetArtifactState{}, nil
+		}
+		return targetArtifactState{
+			Complete:               true,
+			UploadLocked:           true,
+			UploadLockModifiedTime: &staleLockModifiedTime,
+		}, nil
+	}
+	deleteStaleArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI, _ string) (bool, error) {
+		t.Fatal("stale upload lock should not be deleted before skipping a complete target artifact")
+		return false, nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	assert.False(t, replicatorCalled)
+}
+
+func TestReplicaAgent_StartDeletesStaleTargetArtifactUploadLockAndReplicates(t *testing.T) {
+	agent, cleanup := newTestAgentForCompletionMarker(t)
+	defer cleanup()
+	agent.Config.ArtifactUploadLockTimeout = time.Hour
+
+	now := time.Date(2026, 7, 10, 1, 0, 0, 0, time.UTC)
+	nowFunc = func() time.Time { return now }
+
+	fake := &fakeReplicator{}
+	newReplicatorFunc = func(_ *ReplicaAgent) (replicator.Replicator, error) {
+		return fake, nil
+	}
+
+	acquireAttempts := 0
+	tryAcquireArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, target ociobjectstore.ObjectURI) (bool, error) {
+		assert.Equal(t, "target-models/"+constants.ArtifactUploadLockFileName, target.ObjectName)
+		acquireAttempts++
+		return acquireAttempts > 1, nil
+	}
+
+	stateCalls := 0
+	staleLockModifiedTime := now.Add(-2 * time.Hour)
+	targetArtifactStateFunc = func(_ *ociobjectstore.OCIOSDataStore, _ ociobjectstore.ObjectURI) (targetArtifactState, error) {
+		stateCalls++
+		if stateCalls == 1 {
+			return targetArtifactState{}, nil
+		}
+		return targetArtifactState{
+			UploadLocked:           true,
+			UploadLockModifiedTime: &staleLockModifiedTime,
+			UploadLockETag:         "stale-lock-etag",
+		}, nil
+	}
+
+	deletedLock := false
+	deleteStaleArtifactUploadLockFunc = func(_ *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI, etag string) (bool, error) {
+		assert.Equal(t, "target-models/"+constants.ArtifactUploadLockFileName, target.ObjectName)
+		assert.Equal(t, "stale-lock-etag", etag)
+		deletedLock = true
+		return true, nil
+	}
+	uploadCompletionMarkerFunc = func(_ *ociobjectstore.OCIOSDataStore, _ string, _ ociobjectstore.ObjectURI) error {
+		return nil
+	}
+
+	err := agent.Start()
+	require.NoError(t, err)
+	require.Len(t, fake.objects, 1)
+	assert.Equal(t, 2, acquireAttempts)
+	assert.True(t, deletedLock)
+}
+
 func TestReplicaAgent_StartLogsTargetArtifactSizeWhenSkippingCompletedTargetArtifact(t *testing.T) {
 	agent, cleanup := newTestAgentForCompletionMarker(t)
 	defer cleanup()
@@ -871,6 +964,7 @@ func newTestAgentForCompletionMarker(t *testing.T) (*ReplicaAgent, func()) {
 	oldUploadCompletionMarkerFunc := uploadCompletionMarkerFunc
 	oldTryAcquireArtifactUploadLockFunc := tryAcquireArtifactUploadLockFunc
 	oldDeleteArtifactUploadLockFunc := deleteArtifactUploadLockFunc
+	oldDeleteStaleArtifactUploadLockFunc := deleteStaleArtifactUploadLockFunc
 	oldTargetArtifactStateFunc := targetArtifactStateFunc
 	oldSleepFunc := sleepFunc
 	oldNowFunc := nowFunc
@@ -879,6 +973,7 @@ func newTestAgentForCompletionMarker(t *testing.T) (*ReplicaAgent, func()) {
 		uploadCompletionMarkerFunc = oldUploadCompletionMarkerFunc
 		tryAcquireArtifactUploadLockFunc = oldTryAcquireArtifactUploadLockFunc
 		deleteArtifactUploadLockFunc = oldDeleteArtifactUploadLockFunc
+		deleteStaleArtifactUploadLockFunc = oldDeleteStaleArtifactUploadLockFunc
 		targetArtifactStateFunc = oldTargetArtifactStateFunc
 		sleepFunc = oldSleepFunc
 		nowFunc = oldNowFunc

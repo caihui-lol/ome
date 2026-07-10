@@ -418,6 +418,43 @@ func (cds *OCIOSDataStore) DeleteObject(target ObjectURI) error {
 	return nil
 }
 
+// DeleteObjectIfMatch removes an object only when its current ETag matches the
+// caller's observed ETag. It returns false when the object is already gone or
+// has changed since observation.
+func (cds *OCIOSDataStore) DeleteObjectIfMatch(target ObjectURI, etag string) (bool, error) {
+	if etag == "" {
+		return false, fmt.Errorf("etag cannot be empty")
+	}
+	if target.Namespace == "" {
+		namespace, err := cds.GetNamespace()
+		if err != nil {
+			return false, fmt.Errorf("error delete object due to no namespace found: %+v", err)
+		}
+		target.Namespace = *namespace
+	}
+
+	objectFullName := fmt.Sprintf(
+		"%s/%s/%s", target.Namespace, target.BucketName, target.ObjectName)
+	deleteObjectRequest := objectstorage.DeleteObjectRequest{
+		NamespaceName: &target.Namespace,
+		BucketName:    &target.BucketName,
+		ObjectName:    &target.ObjectName,
+		IfMatch:       common.String(etag),
+	}
+	response, err := cds.Client.DeleteObject(context.Background(), deleteObjectRequest)
+	if isObjectMissing(err) || isPreconditionFailed(response.RawResponse, err) {
+		return false, nil
+	}
+	if err != nil || response.RawResponse == nil || response.RawResponse.StatusCode != http.StatusNoContent {
+		return false, fmt.Errorf(
+			"failed to delete object %q with response %+v: %s",
+			objectFullName,
+			response,
+			errorMessage(err))
+	}
+	return true, nil
+}
+
 // HeadObject fetches metadata headers for an object in OCI Object Storage.
 //
 // It returns an OCI HeadObjectResponse which contains fields such as size, ETag, and MD5 checksum.
@@ -513,7 +550,7 @@ func (cds *OCIOSDataStore) ListObjects(target ObjectURI) ([]objectstorage.Object
 		NamespaceName: &target.Namespace,
 		BucketName:    &target.BucketName,
 		Prefix:        &target.Prefix, //Virtual folder name within bucket
-		Fields:        common.String("name,size,md5"),
+		Fields:        common.String("name,size,md5,etag,timeCreated,timeModified"),
 	}
 
 	var allObjects []objectstorage.ObjectSummary
@@ -614,6 +651,10 @@ func isMultipartMd5(md5 string) bool {
 }
 
 func isObjectAlreadyPresent(response *http.Response, err error) bool {
+	return isPreconditionFailed(response, err)
+}
+
+func isPreconditionFailed(response *http.Response, err error) bool {
 	if response != nil && response.StatusCode == http.StatusPreconditionFailed {
 		return true
 	}

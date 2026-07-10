@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/oracle/oci-go-sdk/v65/objectstorage"
+
 	"sigs.k8s.io/ome/internal/ome-agent/replica/common"
 
 	"sigs.k8s.io/ome/pkg/constants"
@@ -21,8 +23,8 @@ const (
 	SourceStorageConfigKeyName = "source"
 	TargetStorageConfigKeyName = "target"
 
-	targetArtifactLockPollInterval = 30 * time.Second
-	targetArtifactLockWaitTimeout  = 72 * time.Hour
+	targetArtifactLockPollInterval       = 30 * time.Second
+	defaultArtifactUploadLockWaitTimeout = 120 * time.Hour
 )
 
 var (
@@ -36,6 +38,9 @@ var (
 	deleteArtifactUploadLockFunc = func(dataStore *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI) error {
 		return dataStore.DeleteObject(target)
 	}
+	deleteStaleArtifactUploadLockFunc = func(dataStore *ociobjectstore.OCIOSDataStore, target ociobjectstore.ObjectURI, etag string) (bool, error) {
+		return dataStore.DeleteObjectIfMatch(target, etag)
+	}
 	targetArtifactStateFunc = defaultTargetArtifactState
 	sleepFunc               = time.Sleep
 	nowFunc                 = time.Now
@@ -48,9 +53,11 @@ type ReplicaAgent struct {
 }
 
 type targetArtifactState struct {
-	Complete          bool
-	UploadLocked      bool
-	ArtifactSizeBytes *int64
+	Complete               bool
+	UploadLocked           bool
+	UploadLockModifiedTime *time.Time
+	UploadLockETag         string
+	ArtifactSizeBytes      *int64
 }
 
 // NewReplicaAgent constructs a new replica agent from the given configuration.
@@ -204,6 +211,12 @@ func (r *ReplicaAgent) prepareTargetArtifactUpload() (bool, bool, error) {
 			}
 			r.Logger.Infof("Target artifact completed while waiting for upload lock but reuse is disabled; continuing with upload")
 		}
+		if r.isTargetArtifactUploadLockStale(state) {
+			if err := r.deleteStaleTargetArtifactUploadLock(state); err != nil {
+				return false, false, err
+			}
+			continue
+		}
 	}
 }
 
@@ -237,7 +250,7 @@ func (r *ReplicaAgent) releaseTargetArtifactUploadLock() {
 }
 
 func (r *ReplicaAgent) waitForTargetArtifactStateChange() (targetArtifactState, error) {
-	deadline := nowFunc().Add(targetArtifactLockWaitTimeout)
+	deadline := nowFunc().Add(r.targetArtifactUploadLockTimeout())
 	for {
 		if !nowFunc().Before(deadline) {
 			return targetArtifactState{}, fmt.Errorf("timed out waiting for target artifact completion marker")
@@ -248,10 +261,51 @@ func (r *ReplicaAgent) waitForTargetArtifactStateChange() (targetArtifactState, 
 		if err != nil {
 			return targetArtifactState{}, fmt.Errorf("failed to inspect target artifact state while waiting for upload lock: %w", err)
 		}
-		if state.Complete || !state.UploadLocked {
+		if state.Complete || !state.UploadLocked || r.isTargetArtifactUploadLockStale(state) {
 			return state, nil
 		}
 	}
+}
+
+func (r *ReplicaAgent) targetArtifactUploadLockTimeout() time.Duration {
+	if r.Config.ArtifactUploadLockTimeout > 0 {
+		return r.Config.ArtifactUploadLockTimeout
+	}
+	return defaultArtifactUploadLockWaitTimeout
+}
+
+func (r *ReplicaAgent) isTargetArtifactUploadLockStale(state targetArtifactState) bool {
+	if !state.UploadLocked || state.UploadLockModifiedTime == nil {
+		return false
+	}
+	return !nowFunc().Before(state.UploadLockModifiedTime.Add(r.targetArtifactUploadLockTimeout()))
+}
+
+func (r *ReplicaAgent) deleteStaleTargetArtifactUploadLock(state targetArtifactState) error {
+	lockURI := r.targetArtifactUploadLockURI()
+	modifiedAt := "unknown"
+	if state.UploadLockModifiedTime != nil {
+		modifiedAt = state.UploadLockModifiedTime.Format(time.RFC3339)
+	}
+	if state.UploadLockETag == "" {
+		return fmt.Errorf("cannot delete stale target artifact upload lock without etag")
+	}
+	r.Logger.Infof(
+		"Deleting stale target artifact upload lock at oci://n/%s/b/%s/o/%s; modifiedAt=%s timeout=%s",
+		lockURI.Namespace,
+		lockURI.BucketName,
+		lockURI.ObjectName,
+		modifiedAt,
+		r.targetArtifactUploadLockTimeout(),
+	)
+	deleted, err := deleteStaleArtifactUploadLockFunc(r.Config.Target.OCIOSDataStore, lockURI, state.UploadLockETag)
+	if err != nil {
+		return fmt.Errorf("failed to delete stale target artifact upload lock: %w", err)
+	}
+	if !deleted {
+		r.Logger.Infof("Stale target artifact upload lock changed before deletion; retrying lock acquisition")
+	}
+	return nil
 }
 
 func (r *ReplicaAgent) targetArtifactState() (targetArtifactState, error) {
@@ -270,6 +324,7 @@ func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target
 	var hasArtifactObject bool
 	var hasUploadLock bool
 	var artifactSizeBytes int64
+	state := targetArtifactState{}
 	for _, object := range objects {
 		if object.Name == nil {
 			continue
@@ -279,6 +334,14 @@ func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target
 			hasCompleteMarker = true
 		case uploadLockName:
 			hasUploadLock = true
+			stateTime := objectSummaryTime(object)
+			if stateTime != nil {
+				lockModifiedTime := *stateTime
+				state.UploadLockModifiedTime = &lockModifiedTime
+			}
+			if object.Etag != nil {
+				state.UploadLockETag = *object.Etag
+			}
 		default:
 			if !constants.IsInternalArtifactObjectName(*object.Name) {
 				hasArtifactObject = true
@@ -289,14 +352,22 @@ func defaultTargetArtifactState(dataStore *ociobjectstore.OCIOSDataStore, target
 		}
 	}
 
-	state := targetArtifactState{
-		Complete:     hasCompleteMarker && hasArtifactObject,
-		UploadLocked: hasUploadLock,
-	}
+	state.Complete = hasCompleteMarker && hasArtifactObject
+	state.UploadLocked = hasUploadLock
 	if artifactSizeBytes > 0 {
 		state.ArtifactSizeBytes = &artifactSizeBytes
 	}
 	return state, nil
+}
+
+func objectSummaryTime(object objectstorage.ObjectSummary) *time.Time {
+	if object.TimeModified != nil {
+		return &object.TimeModified.Time
+	}
+	if object.TimeCreated != nil {
+		return &object.TimeCreated.Time
+	}
+	return nil
 }
 
 func (r *ReplicaAgent) writeCompletionMarker() error {

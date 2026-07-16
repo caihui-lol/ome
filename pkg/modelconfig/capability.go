@@ -24,6 +24,7 @@ const (
 	CapabilityVideoTextToText  Capability = "VIDEO_TEXT_TO_TEXT"
 	CapabilityAudioToText      Capability = "AUDIO_TO_TEXT"
 	CapabilityAudioToAudio     Capability = "AUDIO_TO_AUDIO"
+	CapabilityAudioTextToText  Capability = "AUDIO_TEXT_TO_TEXT"
 	CapabilityEmbedding        Capability = "EMBEDDING"
 )
 
@@ -109,6 +110,10 @@ var capabilityRules = []capabilityRule{
 	// Omni before vision: omni implies audio-output capabilities
 	// that the vision short-circuit alone would miss.
 	omniRule,
+	// Inkling before vision: it is genuinely multi-cap (text and
+	// audio-text), and the vision short-circuit would otherwise drop
+	// the audio-text output.
+	inklingRule,
 	// Vision before ASR: a vision LLM with "ForConditionalGeneration"
 	// shouldn't classify as AudioToText via suffix coincidence.
 	visionRule,
@@ -222,4 +227,14 @@ func embeddingRule(hf HuggingFaceModel) []Capability {
 		return []Capability{CapabilityEmbedding}
 	}
 	return nil
+}
+
+func inklingRule(hf HuggingFaceModel) []Capability {
+	if !strings.Contains(strings.ToLower(hf.GetModelType()), "inkling_mm_model") {
+		return nil
+	}
+	return []Capability{
+		CapabilityTextToText,
+		CapabilityAudioTextToText,
+	}
 }

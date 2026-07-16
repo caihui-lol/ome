@@ -26,6 +26,7 @@ var capabilityToOME = map[modelconfig.Capability]v1beta1.ModelCapability{
 	modelconfig.CapabilityVideoTextToText:  v1beta1.ModelCapabilityVideoTextToText,
 	modelconfig.CapabilityAudioToText:      v1beta1.ModelCapabilityAudioToText,
 	modelconfig.CapabilityAudioToAudio:     v1beta1.ModelCapabilityAudioToAudio,
+	modelconfig.CapabilityAudioTextToText:  v1beta1.ModelCapabilityAudioTextToText,
 	modelconfig.CapabilityEmbedding:        v1beta1.ModelCapabilityEmbedding,
 }
 

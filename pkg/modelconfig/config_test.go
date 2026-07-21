@@ -29,6 +29,105 @@ func TestParseModelConfigFromBytes(t *testing.T) {
 	}
 }
 
+func TestGenericConfigModalitySignals(t *testing.T) {
+	tests := []struct {
+		name       string
+		config     string
+		wantVision bool
+		wantVideo  bool
+		wantAudio  bool
+		wantTextIO bool
+	}{
+		{
+			name: "Nemotron Omni",
+			config: `{
+				"model_type":"NemotronH_Nano_Omni_Reasoning_V3",
+				"architectures":["NemotronH_Nano_Omni_Reasoning_V3"],
+				"auto_map":{"AutoModelForCausalLM":"modeling.NemotronH_Nano_Omni_Reasoning_V3"},
+				"vision_config":{},
+				"video_context_token_id":131081,
+				"sound_context_token_id":27,
+				"sound_config":{"model_type":"parakeet"}
+			}`,
+			wantVision: true,
+			wantVideo:  true,
+			wantAudio:  true,
+			wantTextIO: true,
+		},
+		{
+			name: "Nemotron VL nested causal LM",
+			config: `{
+				"model_type":"NemotronH_Nano_VL_V2",
+				"architectures":["NemotronH_Nano_VL_V2"],
+				"llm_config":{"architectures":["NemotronHForCausalLM"]},
+				"vision_config":{},
+				"video_context_token_id":131081
+			}`,
+			wantVision: true,
+			wantVideo:  true,
+			wantTextIO: true,
+		},
+		{
+			name: "pruning alone is not video",
+			config: `{
+				"model_type":"NemotronH_Nano_VL_V2",
+				"auto_map":{"AutoModelForCausalLM":"modeling.NemotronH_Nano_VL_V2"},
+				"vision_config":{},
+				"video_pruning_rate":0.7
+			}`,
+			wantVision: true,
+			wantTextIO: true,
+		},
+		{
+			name: "temporal vision processor supports video",
+			config: `{
+				"model_type":"qwen2_5_vl",
+				"architectures":["Qwen2_5_VLForConditionalGeneration"],
+				"vision_config":{"temporal_patch_size":2}
+			}`,
+			wantVision: true,
+			wantVideo:  true,
+		},
+		{
+			name: "audio config without vision",
+			config: `{
+				"model_type":"audio_model",
+				"audio_config":{"model_type":"audio_encoder"}
+			}`,
+			wantAudio: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model, err := ParseModelConfig(ModelConfigInput{
+				Path: "config.json",
+				Data: []byte(tt.config),
+			})
+			if err != nil {
+				t.Fatalf("ParseModelConfig returned error: %v", err)
+			}
+
+			if got := model.HasVision(); got != tt.wantVision {
+				t.Errorf("HasVision() = %v, want %v", got, tt.wantVision)
+			}
+			modalityModel, ok := model.(HuggingFaceModalityModel)
+			if !ok {
+				t.Fatal("parsed transformer config does not expose modality signals")
+			}
+			if got := modalityModel.HasVideo(); got != tt.wantVideo {
+				t.Errorf("HasVideo() = %v, want %v", got, tt.wantVideo)
+			}
+			if got := modalityModel.HasAudio(); got != tt.wantAudio {
+				t.Errorf("HasAudio() = %v, want %v", got, tt.wantAudio)
+			}
+			if got := modalityModel.HasTextInputAndOutput(); got != tt.wantTextIO {
+				t.Errorf("HasTextInputAndOutput() = %v, want %v", got, tt.wantTextIO)
+			}
+		})
+	}
+}
+
 func TestUnsupportedModelType(t *testing.T) {
 	configPath := filepath.Join("testdata", "clip_vision_model.json")
 

@@ -92,10 +92,13 @@ func TestContainsAny(t *testing.T) {
 
 // stubModel is a minimal HuggingFaceModel for unit-testing rules.
 type stubModel struct {
-	modelType    string
-	architecture string
-	hasVision    bool
-	isEmbedding  bool
+	modelType             string
+	architecture          string
+	hasVision             bool
+	hasVideo              bool
+	hasAudio              bool
+	hasTextInputAndOutput bool
+	isEmbedding           bool
 }
 
 func (m *stubModel) GetParameterCount() int64         { return 0 }
@@ -107,6 +110,9 @@ func (m *stubModel) GetContextLength() int            { return 0 }
 func (m *stubModel) GetModelSizeBytes() int64         { return 0 }
 func (m *stubModel) GetTorchDtype() string            { return "" }
 func (m *stubModel) HasVision() bool                  { return m.hasVision }
+func (m *stubModel) HasVideo() bool                   { return m.hasVideo }
+func (m *stubModel) HasAudio() bool                   { return m.hasAudio }
+func (m *stubModel) HasTextInputAndOutput() bool      { return m.hasTextInputAndOutput }
 func (m *stubModel) IsEmbedding() bool                { return m.isEmbedding }
 func (m *stubModel) GetCapabilities() []Capability    { return classifyCapabilities(m) }
 func (m *stubModel) GetHFQuantConfig() *HFQuantConfig { return nil }
@@ -190,18 +196,64 @@ func TestClassifyCapabilities_Diffusion(t *testing.T) {
 }
 
 func TestClassifyCapabilities_NemotronH_Nano(t *testing.T) {
-	m := &stubModel{
-		modelType:    "NemotronH_Nano_Omni_Reasoning_V3",
-		architecture: "NemotronH_Nano_Omni_Reasoning_V3",
-		hasVision:    true,
+	tests := []struct {
+		name  string
+		model *stubModel
+		want  []Capability
+	}{
+		{
+			name: "Omni",
+			model: &stubModel{
+				modelType:             "NemotronH_Nano_Omni_Reasoning_V3",
+				architecture:          "NemotronH_Nano_Omni_Reasoning_V3",
+				hasVision:             true,
+				hasVideo:              true,
+				hasAudio:              true,
+				hasTextInputAndOutput: true,
+			},
+			want: []Capability{
+				CapabilityImageTextToText,
+				CapabilityTextToText,
+				CapabilityAudioTextToText,
+				CapabilityVideoTextToText,
+			},
+		},
+		{
+			name: "VL",
+			model: &stubModel{
+				modelType:             "NemotronH_Nano_VL_V2",
+				architecture:          "NemotronH_Nano_VL_V2",
+				hasVision:             true,
+				hasVideo:              true,
+				hasTextInputAndOutput: true,
+			},
+			want: []Capability{
+				CapabilityImageTextToText,
+				CapabilityTextToText,
+				CapabilityVideoTextToText,
+			},
+		},
+		{
+			name: "image only",
+			model: &stubModel{
+				modelType:             "NemotronH_Nano_Image",
+				architecture:          "NemotronH_Nano_Image",
+				hasVision:             true,
+				hasTextInputAndOutput: true,
+			},
+			want: []Capability{
+				CapabilityImageTextToText,
+				CapabilityTextToText,
+			},
+		},
 	}
-	want := []Capability{
-		CapabilityImageTextToText,
-		CapabilityTextToText,
-		CapabilityAudioToText,
-	}
-	if got := classifyCapabilities(m); !equalCaps(got, want) {
-		t.Errorf("got %v, want %v", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyCapabilities(tt.model); !equalCaps(got, tt.want) {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -404,16 +456,20 @@ func TestClassifyCapabilities_RegressionSet(t *testing.T) {
 			},
 		},
 		{
-			name: "NemotronH_Nano Omni Model - falls through to vision due to case mismatch",
+			name: "NemotronH_Nano Omni Model",
 			m: &stubModel{
-				modelType:    "NemotronH_Nano_Omni_Reasoning_V3",
-				architecture: "NemotronH_Nano_Omni_Reasoning_V3",
-				hasVision:    true,
+				modelType:             "NemotronH_Nano_Omni_Reasoning_V3",
+				architecture:          "NemotronH_Nano_Omni_Reasoning_V3",
+				hasVision:             true,
+				hasVideo:              true,
+				hasAudio:              true,
+				hasTextInputAndOutput: true,
 			},
 			want: []Capability{
 				CapabilityImageTextToText,
 				CapabilityTextToText,
-				CapabilityAudioToText,
+				CapabilityAudioTextToText,
+				CapabilityVideoTextToText,
 			},
 		},
 		{

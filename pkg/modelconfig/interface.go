@@ -41,6 +41,15 @@ type HuggingFaceModel interface {
 	GetHFQuantConfig() *HFQuantConfig
 }
 
+// HuggingFaceModalityModel is the additional contract for transformer
+// configs that expose parsed input-modality and text-generation signals.
+type HuggingFaceModalityModel interface {
+	HuggingFaceModel
+	HasVideo() bool
+	HasAudio() bool
+	HasTextInputAndOutput() bool
+}
+
 // HuggingFaceDiffusionModel is the additional contract for diffusion
 // pipelines parsed from model_index.json.
 type HuggingFaceDiffusionModel interface {

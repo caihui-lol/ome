@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // GenericModelConfig is the only HuggingFaceModel implementation for
@@ -13,6 +14,7 @@ import (
 // safetensors files, and falls back to architecture-based estimation.
 type GenericModelConfig struct {
 	BaseModelConfig
+	AutoMap AutoMap `json:"auto_map,omitempty"`
 
 	// Architecture dimensions.
 	HiddenSize            int `json:"hidden_size"`
@@ -34,8 +36,12 @@ type GenericModelConfig struct {
 	// Quantization config (optional).
 	QuantizationConfig *QuantizationConfig `json:"quantization_config,omitempty"`
 
-	// Set during loading when a vision shape signal is detected.
-	hasVisionConfig bool
+	// Set during loading when input-modality or text-generation signals
+	// are detected from the raw JSON shape.
+	hasVisionConfig       bool
+	hasVideoConfig        bool
+	hasAudioConfig        bool
+	hasTextInputAndOutput bool
 }
 
 // GetParameterCount derives a parameter count: try safetensors first,
@@ -126,6 +132,7 @@ var visionShapeKeys = []string{
 // "torch_dtype".
 type nestedLLMConfig struct {
 	Architectures         []string `json:"architectures"`
+	AutoMap               AutoMap  `json:"auto_map,omitempty"`
 	HiddenSize            int      `json:"hidden_size"`
 	NumHiddenLayers       int      `json:"num_hidden_layers"`
 	NumAttentionHeads     int      `json:"num_attention_heads"`
@@ -153,6 +160,8 @@ func probeNestedConfig(data []byte, config *GenericModelConfig) {
 		return
 	}
 
+	config.hasTextInputAndOutput = hasCausalLM(config.Architectures, config.AutoMap)
+
 	for _, key := range nestedLLMConfigKeys {
 		sub, ok := raw[key]
 		if !ok {
@@ -161,6 +170,9 @@ func probeNestedConfig(data []byte, config *GenericModelConfig) {
 		var nested nestedLLMConfig
 		if err := json.Unmarshal(sub, &nested); err != nil {
 			continue
+		}
+		if hasCausalLM(nested.Architectures, nested.AutoMap) {
+			config.hasTextInputAndOutput = true
 		}
 		mergeNestedIntoConfig(config, &nested)
 		break
@@ -176,6 +188,83 @@ func probeNestedConfig(data []byte, config *GenericModelConfig) {
 			break
 		}
 	}
+
+	config.hasVideoConfig = config.hasVisionConfig && hasVideoInputSignal(raw)
+	config.hasAudioConfig = hasAudioInputSignal(raw)
+}
+
+func hasCausalLM(architectures []string, autoMap AutoMap) bool {
+	if strings.TrimSpace(autoMap.AutoModelForCausalLM) != "" {
+		return true
+	}
+	for _, architecture := range architectures {
+		if strings.HasSuffix(architecture, "ForCausalLM") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasVideoInputSignal(raw map[string]json.RawMessage) bool {
+	for _, key := range []string{"video_context_token_id", "video_token_id", "video_token_index"} {
+		if rawPositiveNumber(raw, key) {
+			return true
+		}
+	}
+	if rawNonEmptyObject(raw, "video_config") {
+		return true
+	}
+	return nestedVisionHasVideoShape(raw["vision_config"])
+}
+
+func hasAudioInputSignal(raw map[string]json.RawMessage) bool {
+	if rawNonEmptyObject(raw, "sound_config") || rawNonEmptyObject(raw, "audio_config") {
+		return true
+	}
+	for _, key := range []string{"sound_context_token_id", "audio_context_token_id"} {
+		if rawPositiveNumber(raw, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func nestedVisionHasVideoShape(data json.RawMessage) bool {
+	if len(data) == 0 {
+		return false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false
+	}
+	for _, key := range []string{"temporal_patch_size", "video_temporal_patch_size", "video_target_num_patches"} {
+		if rawPositiveNumber(raw, key) {
+			return true
+		}
+	}
+	var separateVideoEmbedder bool
+	if value, ok := raw["separate_video_embedder"]; ok && json.Unmarshal(value, &separateVideoEmbedder) == nil {
+		return separateVideoEmbedder
+	}
+	return false
+}
+
+func rawPositiveNumber(raw map[string]json.RawMessage, key string) bool {
+	value, ok := raw[key]
+	if !ok {
+		return false
+	}
+	var number float64
+	return json.Unmarshal(value, &number) == nil && number > 0
+}
+
+func rawNonEmptyObject(raw map[string]json.RawMessage, key string) bool {
+	value, ok := raw[key]
+	if !ok {
+		return false
+	}
+	var object map[string]json.RawMessage
+	return json.Unmarshal(value, &object) == nil && len(object) > 0
 }
 
 // mergeNestedIntoConfig copies non-zero fields from nested into config,
@@ -285,6 +374,21 @@ func (c *GenericModelConfig) GetContextLength() int {
 // loading.
 func (c *GenericModelConfig) HasVision() bool {
 	return c.hasVisionConfig
+}
+
+// HasVideo returns true if an explicit video input signal was detected.
+func (c *GenericModelConfig) HasVideo() bool {
+	return c.hasVideoConfig
+}
+
+// HasAudio returns true if an explicit audio input signal was detected.
+func (c *GenericModelConfig) HasAudio() bool {
+	return c.hasAudioConfig
+}
+
+// HasTextInputAndOutput returns true if a causal language-model head was detected.
+func (c *GenericModelConfig) HasTextInputAndOutput() bool {
+	return c.hasTextInputAndOutput
 }
 
 // GetCapabilities returns the model's classified capabilities by

@@ -21,6 +21,7 @@ const (
 	CapabilityTextToAudio      Capability = "TEXT_TO_AUDIO"
 	CapabilityImageTextToAudio Capability = "IMAGE_TEXT_TO_AUDIO"
 	CapabilityVideoTextToAudio Capability = "VIDEO_TEXT_TO_AUDIO"
+	CapabilityVideoTextToText  Capability = "VIDEO_TEXT_TO_TEXT"
 	CapabilityAudioToText      Capability = "AUDIO_TO_TEXT"
 	CapabilityAudioToAudio     Capability = "AUDIO_TO_AUDIO"
 	CapabilityAudioTextToText  Capability = "AUDIO_TEXT_TO_TEXT"
@@ -102,9 +103,9 @@ var capabilityRules = []capabilityRule{
 	// Diffusion first: the pipeline-class signal beats any
 	// architecture-suffix coincidence.
 	diffusionRule,
-	// NemotronH-Nano before vision: it is genuinely multi-cap, and
-	// the vision short-circuit would otherwise drop the text and
-	// audio outputs.
+	// NemotronH-Nano before vision: its config can declare multiple
+	// prompt-conditioned input modalities, which the vision
+	// short-circuit would otherwise drop.
 	nemotronHNanoRule,
 	// Omni before vision: omni implies audio-output capabilities
 	// that the vision short-circuit alone would miss.
@@ -169,11 +170,23 @@ func nemotronHNanoRule(hf HuggingFaceModel) []Capability {
 	if !strings.Contains(strings.ToLower(hf.GetModelType()), "nemotronh_nano") {
 		return nil
 	}
-	return []Capability{
-		CapabilityImageTextToText,
-		CapabilityTextToText,
-		CapabilityAudioToText,
+	modalityModel, ok := hf.(HuggingFaceModalityModel)
+	if !ok || !modalityModel.HasTextInputAndOutput() {
+		return nil
 	}
+
+	capabilities := make([]Capability, 0, 4)
+	if hf.HasVision() {
+		capabilities = append(capabilities, CapabilityImageTextToText)
+	}
+	capabilities = append(capabilities, CapabilityTextToText)
+	if modalityModel.HasAudio() {
+		capabilities = append(capabilities, CapabilityAudioTextToText)
+	}
+	if modalityModel.HasVideo() {
+		capabilities = append(capabilities, CapabilityVideoTextToText)
+	}
+	return capabilities
 }
 
 func omniRule(hf HuggingFaceModel) []Capability {
